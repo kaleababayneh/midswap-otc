@@ -1,0 +1,175 @@
+// Atomic Swap HTLC Contract for Midnight <-> Cardano cross-chain swaps.
+// Copyright (C) — SPDX-License-Identifier: Apache-2.0
+
+pragma language_version >= 0.20;
+
+import CompactStandardLibrary;
+
+// ===== HTLC Ledger State =====
+
+export ledger htlcHash: Bytes<32>;
+export ledger htlcCoinNonce: Bytes<32>;
+export ledger htlcCoinColor: Bytes<32>;
+export ledger htlcCoinValue: Uint<128>;
+export ledger htlcActive: Boolean;
+export ledger htlcExpiryTime: Uint<64>;
+export ledger htlcSender: Bytes<32>;
+export ledger htlcReceiver: Bytes<32>;
+
+constructor() {
+  htlcActive = false;
+  htlcHash = pad(32, "");
+  htlcCoinNonce = pad(32, "");
+  htlcCoinColor = pad(32, "");
+  htlcCoinValue = 0;
+  htlcExpiryTime = 0;
+  htlcSender = pad(32, "");
+  htlcReceiver = pad(32, "");
+}
+
+// Get the caller's public key as raw bytes
+export circuit myAddr(): Bytes<32> {
+  return ownPublicKey().bytes;
+}
+
+// ===== Token Utility Circuits =====
+
+export circuit mintToSelf(
+    domainSep: Bytes<32>,
+    value: Uint<64>,
+    nonce: Bytes<32>
+): ShieldedCoinInfo {
+  return mintShieldedToken(
+    disclose(domainSep),
+    disclose(value),
+    disclose(nonce),
+    left<ZswapCoinPublicKey, ContractAddress>(ownPublicKey())
+  );
+}
+
+export circuit sendToKey(
+    coinInfo: QualifiedShieldedCoinInfo,
+    targetPublicKey: ZswapCoinPublicKey,
+    value: Uint<128>
+): ShieldedSendResult {
+  return sendShielded(
+    disclose(coinInfo),
+    left<ZswapCoinPublicKey, ContractAddress>(disclose(targetPublicKey)),
+    disclose(value)
+  );
+}
+
+// ===== HTLC Circuits =====
+
+// Deposit tokens with a hash-time lock for cross-chain atomic swap.
+// The caller locks coins in this contract. The designated receiver can withdraw
+// by revealing the preimage before expiry. After expiry, the sender can reclaim.
+export circuit depositWithHashTimeLock(
+    coinInfo: QualifiedShieldedCoinInfo,
+    hash: Bytes<32>,
+    expiryTime: Uint<64>,
+    receiver: Bytes<32>
+): ShieldedSendResult {
+    assert(!htlcActive, "HTLC already active");
+    assert(blockTimeLt(disclose(expiryTime)), "Expiry time must be in the future");
+
+    // Send the caller's coin to this contract
+    const result = sendShielded(
+        disclose(coinInfo),
+        right<ZswapCoinPublicKey, ContractAddress>(kernel.self()),
+        disclose(coinInfo.value)
+    );
+
+    // Record the HTLC parameters on the public ledger
+    htlcHash = disclose(hash);
+    htlcCoinNonce = disclose(result.sent.nonce);
+    htlcCoinColor = disclose(result.sent.color);
+    htlcCoinValue = disclose(result.sent.value);
+    htlcExpiryTime = disclose(expiryTime);
+    htlcSender = disclose(ownPublicKey().bytes);
+    htlcReceiver = disclose(receiver);
+    htlcActive = true;
+
+    return result;
+}
+
+// Withdraw tokens by revealing the hash preimage.
+// Only the designated receiver can call this, and only before expiry.
+// mtIndex: the Merkle-tree index of the locked coin (queried off-chain).
+export circuit withdrawWithPreimage(
+    preimage: Bytes<32>,
+    mtIndex: Uint<64>
+): ShieldedSendResult {
+    assert(htlcActive, "No active HTLC");
+    assert(blockTimeLte(htlcExpiryTime), "HTLC has expired");
+    assert(ownPublicKey().bytes == htlcReceiver, "Only designated receiver can withdraw");
+
+    // Verify the preimage matches the stored hash
+    const computed = persistentHash<Bytes<32>>(disclose(preimage));
+    assert(computed == htlcHash, "Invalid preimage");
+
+    // Reconstruct the locked coin with its on-chain Merkle index
+    const qualifiedCoin = QualifiedShieldedCoinInfo {
+        nonce: htlcCoinNonce,
+        color: htlcCoinColor,
+        value: htlcCoinValue,
+        mt_index: disclose(mtIndex)
+    };
+
+    // Send the locked coin to the receiver
+    const result = sendShielded(
+        qualifiedCoin,
+        left<ZswapCoinPublicKey, ContractAddress>(ownPublicKey()),
+        htlcCoinValue
+    );
+
+    // Clear all HTLC state
+    htlcActive = false;
+    htlcHash = pad(32, "");
+    htlcCoinNonce = pad(32, "");
+    htlcCoinColor = pad(32, "");
+    htlcCoinValue = 0;
+    htlcExpiryTime = 0;
+    htlcSender = pad(32, "");
+    htlcReceiver = pad(32, "");
+
+    return result;
+}
+
+// Reclaim tokens after the HTLC has expired.
+// Only the original sender can call this, and only after expiry.
+// mtIndex: the Merkle-tree index of the locked coin (queried off-chain).
+export circuit reclaimAfterExpiry(
+    mtIndex: Uint<64>
+): ShieldedSendResult {
+    assert(htlcActive, "No active HTLC");
+    assert(blockTimeGt(htlcExpiryTime), "HTLC has not expired yet");
+    assert(ownPublicKey().bytes == htlcSender, "Only original sender can reclaim");
+
+    // Reconstruct the locked coin with its on-chain Merkle index
+    const qualifiedCoin = QualifiedShieldedCoinInfo {
+        nonce: htlcCoinNonce,
+        color: htlcCoinColor,
+        value: htlcCoinValue,
+        mt_index: disclose(mtIndex)
+    };
+
+    // Send the locked coin back to the sender
+    const result = sendShielded(
+        qualifiedCoin,
+        left<ZswapCoinPublicKey, ContractAddress>(ownPublicKey()),
+        htlcCoinValue
+    );
+
+    // Clear all HTLC state
+    htlcActive = false;
+    htlcHash = pad(32, "");
+    htlcCoinNonce = pad(32, "");
+    htlcCoinColor = pad(32, "");
+    htlcCoinValue = 0;
+    htlcExpiryTime = 0;
+    htlcSender = pad(32, "");
+    htlcReceiver = pad(32, "");
+
+    return result;
+}
