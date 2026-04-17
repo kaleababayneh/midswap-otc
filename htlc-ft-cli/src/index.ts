@@ -38,6 +38,8 @@ import {
   type ZswapCoinPublicKey,
   type ContractAddress as CompactContractAddress,
 } from '../../contract/src/managed/htlc-ft/contract/index.js';
+import { MidnightBech32m, UnshieldedAddress } from '@midnight-ntwrk/wallet-sdk-address-format';
+import { getNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 import { createHash } from 'node:crypto';
 
 // @ts-expect-error: It's needed to enable WebSocket usage through apollo
@@ -46,6 +48,17 @@ globalThis.WebSocket = WebSocket;
 // ─────────────────────────────────────────────────────────────────────
 // Hex helpers
 // ─────────────────────────────────────────────────────────────────────
+
+/** Parse an address in either hex (64 chars) or bech32m (mn_addr_...) format → 32-byte Uint8Array. */
+function parseAddress(input: string): Uint8Array {
+  const trimmed = input.trim();
+  if (trimmed.startsWith('mn_')) {
+    const parsed = MidnightBech32m.parse(trimmed);
+    const addr = UnshieldedAddress.codec.decode(getNetworkId(), parsed);
+    return new Uint8Array(addr.data);
+  }
+  return hexToBytes(trimmed);
+}
 
 function hexToBytes(hex: string): Uint8Array {
   const clean = hex.startsWith('0x') ? hex.slice(2) : hex;
@@ -233,8 +246,8 @@ const mainLoop = async (
           const hashLock = sha256(preimage);
           logger.info(`Hash lock: ${bytesToHex(hashLock)}`);
 
-          const receiverHex = await rli.question('Receiver address (64 hex chars): ');
-          const receiverBytes = hexToBytes(receiverHex);
+          const receiverInput = await rli.question('Receiver address (hex or mn_addr_...): ');
+          const receiverBytes = parseAddress(receiverInput);
 
           const expiryMinutes = await rli.question('Expiry in minutes from now [60]: ');
           const minutes = parseInt(expiryMinutes || '60', 10);
@@ -281,6 +294,10 @@ const mainLoop = async (
         // ── Check swap status ──
         case '7': {
           const hashHex = await rli.question('Hash lock to check (64 hex chars): ');
+          if (!hashHex.trim()) {
+            logger.error('Hash lock cannot be empty.');
+            break;
+          }
           const hash = hexToBytes(hashHex);
           const state = await getLedgerState(providers, contractAddress);
           if (!state) {
@@ -328,8 +345,8 @@ const mainLoop = async (
 
         // ── Transfer tokens ──
         case '9': {
-          const toHexStr = await rli.question('Recipient address (64 hex chars): ');
-          const toBytes = hexToBytes(toHexStr);
+          const toInput = await rli.question('Recipient address (hex or mn_addr_...): ');
+          const toBytes = parseAddress(toInput);
           const amountStr = await rli.question('Amount to transfer: ');
           const amount = BigInt(amountStr);
           const toAddr: Either<ZswapCoinPublicKey, CompactContractAddress> = {
