@@ -1,0 +1,16 @@
+{
+  "name": "@midnight-ntwrk/htlc-ft-cli",
+  "version": "0.1.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "local-dev": "node --experimental-specifier-resolution=node --loader ts-node/esm src/launcher/local-dev.ts",
+    "preprod-remote": "node --experimental-specifier-resolution=node --loader ts-node/esm src/launcher/preprod.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/json-schema": "^7.0.15",
+    "@types/node": "^25.3.0"
+  }
+}
