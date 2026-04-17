@@ -16,7 +16,7 @@
     "build": "rm -rf dist && tsc --project tsconfig.build.json && cp -Rf ./src/managed ./dist/managed && cp ./src/bboard.compact ./dist",
     "ci": "npm run compact && npm run typecheck && npm run lint && npm run build && npm run test",
     "compact": "compact compile src/bboard.compact ./src/managed/bboard",
-    "compact:htlc": "compact compile src/htlc.compact ./src/managed/htlc",
+    "compact:htlc": "compact compile src/htlc-ft.compact ./src/managed/htlc-ft",
     "lint": "eslint src",
     "prepack": "npm build",
     "test": "vitest",

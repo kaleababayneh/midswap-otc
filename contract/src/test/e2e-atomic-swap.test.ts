@@ -4,7 +4,7 @@
 // identical output to SHA-256(preimage). Both chains verify the SAME hash
 // for the SAME preimage, enabling trustless cross-chain atomic swaps.
 
-import { HTLCSimulator } from "./htlc-simulator.js";
+import { HTLCFTSimulator } from "./htlc-ft-simulator.js";
 import { CardanoHTLCSimulator } from "./cardano-htlc-simulator.js";
 import {
   persistentHash,
@@ -25,10 +25,12 @@ function sha256(data: Uint8Array): Uint8Array {
 const NOW = Math.floor(Date.now() / 1000);
 const ONE_HOUR = 3600;
 
+function createMidnight(coinPublicKey: string): HTLCFTSimulator {
+  return new HTLCFTSimulator(coinPublicKey, "SwapToken", "SWAP", 6n, NOW);
+}
+
 describe("Cross-chain atomic swap: Midnight <-> Cardano", () => {
   it("proves persistentHash(Bytes<32>) and SHA-256 produce identical output", () => {
-    // This is the foundational property that makes the cross-chain swap work.
-    // Midnight's persistentHash on Bytes<32> IS SHA-256.
     for (let i = 0; i < 10; i++) {
       const preimage = randomBytes(32);
       const midnightHash = persistentHash(Bytes32Descriptor, preimage);
@@ -40,74 +42,57 @@ describe("Cross-chain atomic swap: Midnight <-> Cardano", () => {
   });
 
   it("completes a full atomic swap: Alice (Midnight tokens) <-> Bob (Cardano tokens)", () => {
-    // === SETUP ===
-    // Alice holds tokens on Midnight, wants Bob's tokens on Cardano.
-    // Bob holds tokens on Cardano, wants Alice's tokens on Midnight.
     const aliceMidnightKey = toHex(randomBytes(32));
     const bobMidnightKey = toHex(randomBytes(32));
     const aliceCardano = "alice_cardano_pkh";
     const bobCardano = "bob_cardano_pkh";
 
-    // Alice generates a secret preimage
     const preimage = randomBytes(32);
-    // Same hash on both chains (persistentHash == SHA-256)
     const hashLock = sha256(preimage);
 
-    // Initialize Midnight simulator (Alice is sender)
-    const midnight = new HTLCSimulator(aliceMidnightKey, NOW);
+    // Initialize Midnight (FungibleToken HTLC)
+    const midnight = createMidnight(aliceMidnightKey);
     midnight.switchUser(bobMidnightKey);
     const bobMidnightAddr = midnight.myAddr();
     midnight.switchUser(aliceMidnightKey);
 
-    // Initialize Cardano simulator (Bob is sender)
+    // Initialize Cardano simulator
     const cardano = new CardanoHTLCSimulator(bobCardano, NOW);
 
-    // === STEP 1: Mint tokens on both chains ===
-
-    // Alice mints 1000 tokens on Midnight
-    const aliceCoin = midnight.mintQualifiedCoin(
-      randomBytes(32),
-      1000n,
-      randomBytes(32),
-    );
-
-    // Bob mints 500 SWAP tokens on Cardano
+    // === Mint tokens on both chains ===
+    const aliceAddr = midnight.callerAddress();
+    midnight.mint(aliceAddr, 1000n);
     cardano.mintToken("SWAP", 500n);
 
-    // === STEP 2: Alice deposits on Midnight (initiator, longer timeout) ===
+    // === Alice deposits on Midnight (initiator, longer timeout) ===
     const midnightExpiry = BigInt(NOW + ONE_HOUR * 2);
-    midnight.deposit(aliceCoin, hashLock, midnightExpiry, bobMidnightAddr);
+    midnight.deposit(1000n, hashLock, midnightExpiry, bobMidnightAddr);
 
     const midnightState = midnight.getLedger();
     expect(midnightState.htlcActive).toBe(true);
     expect(midnightState.htlcHash).toEqual(hashLock);
 
-    const lockedCoinMtIndex =
-      midnight.circuitContext.currentZswapLocalState.currentIndex - 1n;
-
-    // === STEP 3: Bob verifies Midnight deposit, then deposits on Cardano ===
-    // (shorter timeout — critical for atomic swap safety)
+    // === Bob verifies Midnight deposit, then deposits on Cardano ===
     const cardanoDeadline = NOW + ONE_HOUR;
     cardano.deposit(hashLock, aliceCardano, 500n, "SWAP", cardanoDeadline);
 
     expect(cardano.getHTLC().active).toBe(true);
     expect(cardano.getHTLC().amount).toBe(500n);
 
-    // === STEP 4: Alice claims on Cardano by revealing the preimage ===
-    // This is where the preimage becomes public on-chain.
+    // === Alice claims on Cardano by revealing the preimage ===
     cardano.switchUser(aliceCardano);
     cardano.withdraw(preimage);
 
     expect(cardano.getHTLC().active).toBe(false);
     expect(cardano.getBalance(aliceCardano, "SWAP")).toBe(500n);
 
-    // === STEP 5: Bob observes the preimage from Cardano, claims on Midnight ===
+    // === Bob observes the preimage from Cardano, claims on Midnight ===
     midnight.switchUser(bobMidnightKey);
-    midnight.withdraw(preimage, lockedCoinMtIndex);
+    midnight.withdraw(preimage);
 
     const finalState = midnight.getLedger();
     expect(finalState.htlcActive).toBe(false);
-    expect(finalState.htlcCoinValue).toBe(0n);
+    expect(finalState.htlcAmount).toBe(0n);
   });
 
   it("allows both parties to reclaim if nobody claims (timeout path)", () => {
@@ -119,8 +104,7 @@ describe("Cross-chain atomic swap: Midnight <-> Cardano", () => {
     const preimage = randomBytes(32);
     const hashLock = sha256(preimage);
 
-    // Setup
-    const midnight = new HTLCSimulator(aliceMidnightKey, NOW);
+    const midnight = createMidnight(aliceMidnightKey);
     midnight.switchUser(bobMidnightKey);
     const bobMidnightAddr = midnight.myAddr();
     midnight.switchUser(aliceMidnightKey);
@@ -128,28 +112,16 @@ describe("Cross-chain atomic swap: Midnight <-> Cardano", () => {
     const cardano = new CardanoHTLCSimulator(bobCardano, NOW);
 
     // Mint and deposit on both chains
-    const coin = midnight.mintQualifiedCoin(
-      randomBytes(32),
-      1000n,
-      randomBytes(32),
-    );
+    const aliceAddr = midnight.callerAddress();
+    midnight.mint(aliceAddr, 1000n);
     cardano.mintToken("SWAP", 500n);
 
-    midnight.deposit(
-      coin,
-      hashLock,
-      BigInt(NOW + ONE_HOUR * 2),
-      bobMidnightAddr,
-    );
-    const lockedMtIndex =
-      midnight.circuitContext.currentZswapLocalState.currentIndex - 1n;
-
+    midnight.deposit(1000n, hashLock, BigInt(NOW + ONE_HOUR * 2), bobMidnightAddr);
     cardano.deposit(hashLock, aliceCardano, 500n, "SWAP", NOW + ONE_HOUR);
 
     // --- Nobody claims. Time passes. ---
 
-    // Cardano HTLC expires first (shorter deadline).
-    // Bob reclaims his Cardano tokens.
+    // Cardano HTLC expires first (shorter deadline). Bob reclaims.
     cardano.setTime(NOW + ONE_HOUR + 1);
     cardano.switchUser(bobCardano);
     cardano.reclaim();
@@ -157,11 +129,10 @@ describe("Cross-chain atomic swap: Midnight <-> Cardano", () => {
     expect(cardano.getHTLC().active).toBe(false);
     expect(cardano.getBalance(bobCardano, "SWAP")).toBe(500n);
 
-    // Midnight HTLC expires later.
-    // Alice reclaims her Midnight tokens.
+    // Midnight HTLC expires later. Alice reclaims.
     midnight.setBlockTime(NOW + ONE_HOUR * 2 + 1);
     midnight.switchUser(aliceMidnightKey);
-    midnight.reclaim(lockedMtIndex);
+    midnight.reclaim();
 
     expect(midnight.getLedger().htlcActive).toBe(false);
   });
@@ -173,23 +144,17 @@ describe("Cross-chain atomic swap: Midnight <-> Cardano", () => {
     const preimage = randomBytes(32);
     const hashLock = sha256(preimage);
 
-    const midnight = new HTLCSimulator(aliceMidnightKey, NOW);
+    const midnight = createMidnight(aliceMidnightKey);
     midnight.switchUser(bobMidnightKey);
     const bobAddr = midnight.myAddr();
     midnight.switchUser(aliceMidnightKey);
 
-    const coin = midnight.mintQualifiedCoin(
-      randomBytes(32),
-      1000n,
-      randomBytes(32),
-    );
-    midnight.deposit(coin, hashLock, BigInt(NOW + ONE_HOUR), bobAddr);
-    const mtIndex =
-      midnight.circuitContext.currentZswapLocalState.currentIndex - 1n;
+    const aliceAddr = midnight.callerAddress();
+    midnight.mint(aliceAddr, 1000n);
+    midnight.deposit(1000n, hashLock, BigInt(NOW + ONE_HOUR), bobAddr);
 
-    // Bob tries to claim with a wrong preimage
     midnight.switchUser(bobMidnightKey);
-    expect(() => midnight.withdraw(randomBytes(32), mtIndex)).toThrow(
+    expect(() => midnight.withdraw(randomBytes(32))).toThrow(
       "Invalid preimage",
     );
   });
@@ -205,7 +170,6 @@ describe("Cross-chain atomic swap: Midnight <-> Cardano", () => {
     cardano.mintToken("SWAP", 500n);
     cardano.deposit(hashLock, aliceCardano, 500n, "SWAP", NOW + ONE_HOUR);
 
-    // Alice tries with wrong preimage
     cardano.switchUser(aliceCardano);
     expect(() => cardano.withdraw(randomBytes(32))).toThrow("Invalid preimage");
   });
@@ -222,23 +186,18 @@ describe("Cross-chain atomic swap: Midnight <-> Cardano", () => {
     const hashLock = sha256(preimage);
 
     // Midnight side
-    const midnight = new HTLCSimulator(aliceMidnightKey, NOW);
+    const midnight = createMidnight(aliceMidnightKey);
     midnight.switchUser(bobMidnightKey);
     const bobAddr = midnight.myAddr();
     midnight.switchUser(aliceMidnightKey);
 
-    const coin = midnight.mintQualifiedCoin(
-      randomBytes(32),
-      1000n,
-      randomBytes(32),
-    );
-    midnight.deposit(coin, hashLock, BigInt(NOW + ONE_HOUR), bobAddr);
-    const mtIndex =
-      midnight.circuitContext.currentZswapLocalState.currentIndex - 1n;
+    const aliceAddr = midnight.callerAddress();
+    midnight.mint(aliceAddr, 1000n);
+    midnight.deposit(1000n, hashLock, BigInt(NOW + ONE_HOUR), bobAddr);
 
     // Attacker tries on Midnight (even with correct preimage)
     midnight.switchUser(attackerMidnightKey);
-    expect(() => midnight.withdraw(preimage, mtIndex)).toThrow(
+    expect(() => midnight.withdraw(preimage)).toThrow(
       "Only designated receiver can withdraw",
     );
 
@@ -247,7 +206,6 @@ describe("Cross-chain atomic swap: Midnight <-> Cardano", () => {
     cardano.mintToken("SWAP", 500n);
     cardano.deposit(hashLock, aliceCardano, 500n, "SWAP", NOW + ONE_HOUR);
 
-    // Attacker tries on Cardano
     cardano.switchUser(attackerCardano);
     expect(() => cardano.withdraw(preimage)).toThrow(
       "Only receiver can withdraw",
@@ -255,9 +213,6 @@ describe("Cross-chain atomic swap: Midnight <-> Cardano", () => {
   });
 
   it("enforces correct timeout ordering (Cardano shorter, Midnight longer)", () => {
-    // Critical safety property: the responder's (Cardano) deadline MUST be
-    // shorter than the initiator's (Midnight). If Alice claims on Cardano
-    // at the last second, Bob still has time to claim on Midnight.
     const aliceMidnightKey = toHex(randomBytes(32));
     const bobMidnightKey = toHex(randomBytes(32));
     const aliceCardano = "alice_cardano_pkh";
@@ -266,30 +221,19 @@ describe("Cross-chain atomic swap: Midnight <-> Cardano", () => {
     const preimage = randomBytes(32);
     const hashLock = sha256(preimage);
 
-    const midnight = new HTLCSimulator(aliceMidnightKey, NOW);
+    const midnight = createMidnight(aliceMidnightKey);
     midnight.switchUser(bobMidnightKey);
     const bobAddr = midnight.myAddr();
     midnight.switchUser(aliceMidnightKey);
 
     const cardano = new CardanoHTLCSimulator(bobCardano, NOW);
 
-    const coin = midnight.mintQualifiedCoin(
-      randomBytes(32),
-      1000n,
-      randomBytes(32),
-    );
+    const aliceAddr = midnight.callerAddress();
+    midnight.mint(aliceAddr, 1000n);
     cardano.mintToken("SWAP", 500n);
 
     // Midnight: 2-hour expiry. Cardano: 1-hour expiry.
-    midnight.deposit(
-      coin,
-      hashLock,
-      BigInt(NOW + ONE_HOUR * 2),
-      bobAddr,
-    );
-    const mtIndex =
-      midnight.circuitContext.currentZswapLocalState.currentIndex - 1n;
-
+    midnight.deposit(1000n, hashLock, BigInt(NOW + ONE_HOUR * 2), bobAddr);
     cardano.deposit(hashLock, aliceCardano, 500n, "SWAP", NOW + ONE_HOUR);
 
     // Alice claims on Cardano right at the deadline boundary
@@ -300,7 +244,7 @@ describe("Cross-chain atomic swap: Midnight <-> Cardano", () => {
     // Bob still has a full hour to claim on Midnight
     midnight.setBlockTime(NOW + ONE_HOUR);
     midnight.switchUser(bobMidnightKey);
-    midnight.withdraw(preimage, mtIndex);
+    midnight.withdraw(preimage);
 
     expect(midnight.getLedger().htlcActive).toBe(false);
     expect(cardano.getHTLC().active).toBe(false);
@@ -317,7 +261,6 @@ describe("Cross-chain atomic swap: Midnight <-> Cardano", () => {
     cardano.mintToken("SWAP", 500n);
     cardano.deposit(hashLock, aliceCardano, 500n, "SWAP", NOW + ONE_HOUR);
 
-    // Time passes beyond deadline
     cardano.setTime(NOW + ONE_HOUR + 1);
     cardano.switchUser(aliceCardano);
     expect(() => cardano.withdraw(preimage)).toThrow("HTLC has expired");
@@ -334,7 +277,6 @@ describe("Cross-chain atomic swap: Midnight <-> Cardano", () => {
     cardano.mintToken("SWAP", 500n);
     cardano.deposit(hashLock, aliceCardano, 500n, "SWAP", NOW + ONE_HOUR);
 
-    // Bob tries to reclaim before deadline
     expect(() => cardano.reclaim()).toThrow("HTLC has not expired yet");
   });
 
@@ -348,29 +290,24 @@ describe("Cross-chain atomic swap: Midnight <-> Cardano", () => {
     const preimage1 = randomBytes(32);
     const hash1 = sha256(preimage1);
 
-    const midnight = new HTLCSimulator(aliceMidnightKey, NOW);
+    const midnight = createMidnight(aliceMidnightKey);
     midnight.switchUser(bobMidnightKey);
     const bobAddr = midnight.myAddr();
     midnight.switchUser(aliceMidnightKey);
 
     const cardano = new CardanoHTLCSimulator(bobCardano, NOW);
 
-    const coin1 = midnight.mintQualifiedCoin(
-      randomBytes(32),
-      500n,
-      randomBytes(32),
-    );
+    const aliceAddr = midnight.callerAddress();
+    midnight.mint(aliceAddr, 500n);
     cardano.mintToken("SWAP", 300n);
 
-    midnight.deposit(coin1, hash1, BigInt(NOW + ONE_HOUR * 2), bobAddr);
-    const mt1 =
-      midnight.circuitContext.currentZswapLocalState.currentIndex - 1n;
+    midnight.deposit(500n, hash1, BigInt(NOW + ONE_HOUR * 2), bobAddr);
     cardano.deposit(hash1, aliceCardano, 300n, "SWAP", NOW + ONE_HOUR);
 
     cardano.switchUser(aliceCardano);
     cardano.withdraw(preimage1);
     midnight.switchUser(bobMidnightKey);
-    midnight.withdraw(preimage1, mt1);
+    midnight.withdraw(preimage1);
 
     expect(midnight.getLedger().htlcActive).toBe(false);
     expect(cardano.getHTLC().active).toBe(false);
@@ -380,23 +317,17 @@ describe("Cross-chain atomic swap: Midnight <-> Cardano", () => {
     const hash2 = sha256(preimage2);
 
     midnight.switchUser(aliceMidnightKey);
-    const coin2 = midnight.mintQualifiedCoin(
-      randomBytes(32),
-      700n,
-      randomBytes(32),
-    );
+    midnight.mint(aliceAddr, 700n);
     cardano.switchUser(bobCardano);
     cardano.mintToken("SWAP", 400n);
 
-    midnight.deposit(coin2, hash2, BigInt(NOW + ONE_HOUR * 2), bobAddr);
-    const mt2 =
-      midnight.circuitContext.currentZswapLocalState.currentIndex - 1n;
+    midnight.deposit(700n, hash2, BigInt(NOW + ONE_HOUR * 2), bobAddr);
     cardano.deposit(hash2, aliceCardano, 400n, "SWAP", NOW + ONE_HOUR);
 
     cardano.switchUser(aliceCardano);
     cardano.withdraw(preimage2);
     midnight.switchUser(bobMidnightKey);
-    midnight.withdraw(preimage2, mt2);
+    midnight.withdraw(preimage2);
 
     expect(midnight.getLedger().htlcActive).toBe(false);
     expect(cardano.getBalance(aliceCardano, "SWAP")).toBe(700n);

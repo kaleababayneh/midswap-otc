@@ -6,7 +6,7 @@
 //
 // Both sides share the same 32-byte preimage and verify SHA-256(preimage) == stored hash.
 
-import { HTLCSimulator } from "./htlc-simulator.js";
+import { HTLCFTSimulator } from "./htlc-ft-simulator.js";
 import { PlutusHTLCEvaluator } from "./plutus-htlc-evaluator.js";
 import {
   persistentHash,
@@ -45,6 +45,10 @@ const SENDER_PKH = new Uint8Array(
 const RECEIVER_PKH = new Uint8Array(
   Buffer.from("ccdd2233ccdd2233ccdd2233ccdd2233ccdd2233ccdd2233ccdd2233", "hex"),
 );
+
+function createMidnight(coinPublicKey: string): HTLCFTSimulator {
+  return new HTLCFTSimulator(coinPublicKey, "SwapToken", "SWAP", 6n, NOW);
+}
 
 describe("Full cross-chain e2e: Midnight compact-runtime + Cardano Plutus CEK machine", () => {
   let plutus: PlutusHTLCEvaluator;
@@ -127,7 +131,7 @@ describe("Full cross-chain e2e: Midnight compact-runtime + Cardano Plutus CEK ma
       deadline,
       [RECEIVER_PKH],
       0n,
-      deadline + 1000n, // upper bound past deadline
+      deadline + 1000n,
     );
     expect(result.accepted).toBe(false);
   });
@@ -141,7 +145,7 @@ describe("Full cross-chain e2e: Midnight compact-runtime + Cardano Plutus CEK ma
       RECEIVER_PKH,
       deadline,
       [SENDER_PKH],
-      deadline + 1000n, // lower bound past deadline
+      deadline + 1000n,
       null,
     );
     expect(result.accepted).toBe(true);
@@ -156,7 +160,7 @@ describe("Full cross-chain e2e: Midnight compact-runtime + Cardano Plutus CEK ma
       RECEIVER_PKH,
       deadline,
       [SENDER_PKH],
-      NOW_MS, // lower bound before deadline
+      NOW_MS,
       null,
     );
     expect(result.accepted).toBe(false);
@@ -174,32 +178,21 @@ describe("Full cross-chain e2e: Midnight compact-runtime + Cardano Plutus CEK ma
     const aliceMidnightKey = toHex(randomBytes(32));
     const bobMidnightKey = toHex(randomBytes(32));
 
-    const midnight = new HTLCSimulator(aliceMidnightKey, NOW);
+    const midnight = createMidnight(aliceMidnightKey);
     midnight.switchUser(bobMidnightKey);
     const bobMidnightAddr = midnight.myAddr();
     midnight.switchUser(aliceMidnightKey);
 
-    // Alice mints & deposits on Midnight (initiator, 2hr timeout)
-    const aliceCoin = midnight.mintQualifiedCoin(
-      randomBytes(32),
-      1000n,
-      randomBytes(32),
-    );
-    midnight.deposit(
-      aliceCoin,
-      hashLock,
-      BigInt(NOW + ONE_HOUR * 2),
-      bobMidnightAddr,
-    );
+    // Alice mints FungibleTokens & deposits on Midnight (initiator, 2hr timeout)
+    const aliceAddr = midnight.callerAddress();
+    midnight.mint(aliceAddr, 1000n);
+    midnight.deposit(1000n, hashLock, BigInt(NOW + ONE_HOUR * 2), bobMidnightAddr);
+
     expect(midnight.getLedger().htlcActive).toBe(true);
     expect(midnight.getLedger().htlcHash).toEqual(hashLock);
 
-    const lockedMtIndex =
-      midnight.circuitContext.currentZswapLocalState.currentIndex - 1n;
-
     // ──── CARDANO: real Plutus CEK machine (compiled UPLC execution) ────
 
-    // Bob deposits on Cardano (responder, 1hr timeout)
     const cardanoDeadline = NOW_MS + ONE_HOUR_MS;
 
     // Verify Bob's deposit is valid (validator would accept reclaim later)
@@ -217,30 +210,28 @@ describe("Full cross-chain e2e: Midnight compact-runtime + Cardano Plutus CEK ma
     // ──── SWAP EXECUTION ────
 
     // Step 1: Alice claims on Cardano by revealing the preimage
-    // → Run through the REAL Plutus CEK machine
     const aliceClaim = plutus.evaluateWithdraw(
       SHARED_PREIMAGE,
       hashLock,
       SENDER_PKH,
       RECEIVER_PKH,
       cardanoDeadline,
-      [RECEIVER_PKH], // Alice is the receiver on Cardano
+      [RECEIVER_PKH],
       0n,
-      NOW_MS + ONE_HOUR_MS / 2n, // well before deadline
+      NOW_MS + ONE_HOUR_MS / 2n,
     );
     expect(aliceClaim.accepted).toBe(true);
 
     // Step 2: Bob observes the preimage on Cardano, claims on Midnight
-    // → Run through the REAL compact-runtime
     midnight.switchUser(bobMidnightKey);
-    midnight.withdraw(SHARED_PREIMAGE, lockedMtIndex);
+    midnight.withdraw(SHARED_PREIMAGE);
 
     expect(midnight.getLedger().htlcActive).toBe(false);
-    expect(midnight.getLedger().htlcCoinValue).toBe(0n);
+    expect(midnight.getLedger().htlcAmount).toBe(0n);
 
     // ──── BOTH RUNTIMES VERIFIED THE SAME PREIMAGE ────
-    // Midnight: persistentHash(preimage) == stored hash ✓ (compact-runtime WASM)
-    // Cardano:  sha2_256(preimage) == stored hash ✓ (Plutus CEK machine)
+    // Midnight: persistentHash(preimage) == stored hash  (compact-runtime WASM)
+    // Cardano:  sha2_256(preimage) == stored hash        (Plutus CEK machine)
   });
 
   it("refund path: both sides reclaim through their real runtimes", () => {
@@ -250,24 +241,14 @@ describe("Full cross-chain e2e: Midnight compact-runtime + Cardano Plutus CEK ma
     const aliceMidnightKey = toHex(randomBytes(32));
     const bobMidnightKey = toHex(randomBytes(32));
 
-    const midnight = new HTLCSimulator(aliceMidnightKey, NOW);
+    const midnight = createMidnight(aliceMidnightKey);
     midnight.switchUser(bobMidnightKey);
     const bobMidnightAddr = midnight.myAddr();
     midnight.switchUser(aliceMidnightKey);
 
-    const coin = midnight.mintQualifiedCoin(
-      randomBytes(32),
-      1000n,
-      randomBytes(32),
-    );
-    midnight.deposit(
-      coin,
-      hashLock,
-      BigInt(NOW + ONE_HOUR * 2),
-      bobMidnightAddr,
-    );
-    const lockedMtIndex =
-      midnight.circuitContext.currentZswapLocalState.currentIndex - 1n;
+    const aliceAddr = midnight.callerAddress();
+    midnight.mint(aliceAddr, 1000n);
+    midnight.deposit(1000n, hashLock, BigInt(NOW + ONE_HOUR * 2), bobMidnightAddr);
 
     // ──── NOBODY CLAIMS — TIME PASSES ────
 
@@ -287,7 +268,7 @@ describe("Full cross-chain e2e: Midnight compact-runtime + Cardano Plutus CEK ma
     // Midnight deadline expires later (2hr). Alice reclaims via compact-runtime.
     midnight.setBlockTime(NOW + ONE_HOUR * 2 + 1);
     midnight.switchUser(aliceMidnightKey);
-    midnight.reclaim(lockedMtIndex);
+    midnight.reclaim();
     expect(midnight.getLedger().htlcActive).toBe(false);
   });
 
@@ -312,22 +293,17 @@ describe("Full cross-chain e2e: Midnight compact-runtime + Cardano Plutus CEK ma
     const aliceKey = toHex(randomBytes(32));
     const bobKey = toHex(randomBytes(32));
 
-    const midnight = new HTLCSimulator(aliceKey, NOW);
+    const midnight = createMidnight(aliceKey);
     midnight.switchUser(bobKey);
     const bobAddr = midnight.myAddr();
     midnight.switchUser(aliceKey);
 
-    const coin = midnight.mintQualifiedCoin(
-      randomBytes(32),
-      1000n,
-      randomBytes(32),
-    );
-    midnight.deposit(coin, hashLock, BigInt(NOW + ONE_HOUR), bobAddr);
-    const mtIdx =
-      midnight.circuitContext.currentZswapLocalState.currentIndex - 1n;
+    const aliceAddr = midnight.callerAddress();
+    midnight.mint(aliceAddr, 1000n);
+    midnight.deposit(1000n, hashLock, BigInt(NOW + ONE_HOUR), bobAddr);
 
     midnight.switchUser(bobKey);
-    expect(() => midnight.withdraw(wrongPreimage, mtIdx)).toThrow(
+    expect(() => midnight.withdraw(wrongPreimage)).toThrow(
       "Invalid preimage",
     );
   });

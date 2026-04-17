@@ -1,0 +1,23 @@
+// SPDX-License-Identifier: MIT
+// OpenZeppelin Compact Contracts v0.0.1-alpha.1 (security/Initializable.compact)
+
+pragma language_version >= 0.21.0;
+
+module Initializable {
+  import CompactStandardLibrary;
+
+  export ledger _isInitialized: Boolean;
+
+  export circuit initialize(): [] {
+    assertNotInitialized();
+    _isInitialized = true;
+  }
+
+  export circuit assertInitialized(): [] {
+    assert(_isInitialized, "Initializable: contract not initialized");
+  }
+
+  export circuit assertNotInitialized(): [] {
+    assert(!_isInitialized, "Initializable: contract already initialized");
+  }
+}

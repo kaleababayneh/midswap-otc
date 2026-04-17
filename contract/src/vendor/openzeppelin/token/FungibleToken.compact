@@ -1,0 +1,223 @@
+// SPDX-License-Identifier: MIT
+// OpenZeppelin Compact Contracts v0.0.1-alpha.1 (token/FungibleToken.compact)
+
+pragma language_version >= 0.21.0;
+
+module FungibleToken {
+  import CompactStandardLibrary;
+  import "../security/Initializable" prefix Initializable_;
+  import "../utils/Utils" prefix Utils_;
+
+  export ledger _balances: Map<Either<ZswapCoinPublicKey, ContractAddress>, Uint<128>>;
+  export ledger _allowances: Map<Either<ZswapCoinPublicKey, ContractAddress>,
+                                 Map<Either<ZswapCoinPublicKey, ContractAddress>, Uint<128>>>;
+
+  export ledger _totalSupply: Uint<128>;
+
+  export sealed ledger _name: Opaque<"string">;
+  export sealed ledger _symbol: Opaque<"string">;
+  export sealed ledger _decimals: Uint<8>;
+
+  export circuit initialize(
+                   name_: Opaque<"string">,
+                   symbol_: Opaque<"string">,
+                   decimals_: Uint<8>
+                   ): [] {
+    Initializable_initialize();
+    _name = disclose(name_);
+    _symbol = disclose(symbol_);
+    _decimals = disclose(decimals_);
+  }
+
+  export circuit name(): Opaque<"string"> {
+    Initializable_assertInitialized();
+    return _name;
+  }
+
+  export circuit symbol(): Opaque<"string"> {
+    Initializable_assertInitialized();
+    return _symbol;
+  }
+
+  export circuit decimals(): Uint<8> {
+    Initializable_assertInitialized();
+    return _decimals;
+  }
+
+  export circuit totalSupply(): Uint<128> {
+    Initializable_assertInitialized();
+    return _totalSupply;
+  }
+
+  export circuit balanceOf(account: Either<ZswapCoinPublicKey, ContractAddress>): Uint<128> {
+    Initializable_assertInitialized();
+    if (!_balances.member(disclose(account))) {
+      return 0;
+    }
+    return _balances.lookup(disclose(account));
+  }
+
+  export circuit transfer(
+                   to: Either<ZswapCoinPublicKey, ContractAddress>,
+                   value: Uint<128>
+                   ): Boolean {
+    Initializable_assertInitialized();
+    assert(!Utils_isContractAddress(to), "FungibleToken: Unsafe Transfer");
+    return _unsafeTransfer(to, value);
+  }
+
+  export circuit _unsafeTransfer(
+                   to: Either<ZswapCoinPublicKey, ContractAddress>,
+                   value: Uint<128>
+                   ): Boolean {
+    Initializable_assertInitialized();
+    const owner = left<ZswapCoinPublicKey, ContractAddress>(ownPublicKey());
+    _unsafeUncheckedTransfer(owner, to, value);
+    return true;
+  }
+
+  export circuit allowance(
+                   owner: Either<ZswapCoinPublicKey, ContractAddress>,
+                   spender: Either<ZswapCoinPublicKey, ContractAddress>
+                   ): Uint<128> {
+    Initializable_assertInitialized();
+    if (!_allowances.member(disclose(owner)) || !_allowances.lookup(owner).member(disclose(spender))) {
+      return 0;
+    }
+    return _allowances.lookup(owner).lookup(disclose(spender));
+  }
+
+  export circuit approve(spender: Either<ZswapCoinPublicKey, ContractAddress>,
+                         value: Uint<128>
+                         ): Boolean {
+    Initializable_assertInitialized();
+    const owner = left<ZswapCoinPublicKey, ContractAddress>(ownPublicKey());
+    _approve(owner, spender, value);
+    return true;
+  }
+
+  export circuit transferFrom(
+                   fromAddress: Either<ZswapCoinPublicKey, ContractAddress>,
+                   to: Either<ZswapCoinPublicKey, ContractAddress>,
+                   value: Uint<128>
+                   ): Boolean {
+    Initializable_assertInitialized();
+    assert(!Utils_isContractAddress(to), "FungibleToken: Unsafe Transfer");
+    return _unsafeTransferFrom(fromAddress, to, value);
+  }
+
+  export circuit _unsafeTransferFrom(
+                   fromAddress: Either<ZswapCoinPublicKey, ContractAddress>,
+                   to: Either<ZswapCoinPublicKey, ContractAddress>,
+                   value: Uint<128>
+                   ): Boolean {
+    Initializable_assertInitialized();
+    const spender = left<ZswapCoinPublicKey, ContractAddress>(ownPublicKey());
+    _spendAllowance(fromAddress, spender, value);
+    _unsafeUncheckedTransfer(fromAddress, to, value);
+    return true;
+  }
+
+  export circuit _transfer(
+                   fromAddress: Either<ZswapCoinPublicKey, ContractAddress>,
+                   to: Either<ZswapCoinPublicKey, ContractAddress>,
+                   value: Uint<128>
+                   ): [] {
+    Initializable_assertInitialized();
+    assert(!Utils_isContractAddress(to), "FungibleToken: Unsafe Transfer");
+    _unsafeUncheckedTransfer(fromAddress, to, value);
+  }
+
+  export circuit _unsafeUncheckedTransfer(
+                   fromAddress: Either<ZswapCoinPublicKey, ContractAddress>,
+                   to: Either<ZswapCoinPublicKey, ContractAddress>,
+                   value: Uint<128>
+                   ): [] {
+    Initializable_assertInitialized();
+    assert(!Utils_isKeyOrAddressZero(fromAddress), "FungibleToken: invalid sender");
+    assert(!Utils_isKeyOrAddressZero(to), "FungibleToken: invalid receiver");
+    _update(fromAddress, to, value);
+  }
+
+  circuit _update(fromAddress: Either<ZswapCoinPublicKey, ContractAddress>,
+                  to: Either<ZswapCoinPublicKey, ContractAddress>,
+                  value: Uint<128>
+                  ): [] {
+    Initializable_assertInitialized();
+    if (Utils_isKeyOrAddressZero(disclose(fromAddress))) {
+      // Mint
+      const MAX_UINT128 = 340282366920938463463374607431768211455;
+      assert(MAX_UINT128 - _totalSupply >= value, "FungibleToken: arithmetic overflow");
+      _totalSupply = disclose(_totalSupply + value as Uint<128>);
+    } else {
+      const fromBal = balanceOf(fromAddress);
+      assert(fromBal >= value, "FungibleToken: insufficient balance");
+      _balances.insert(disclose(fromAddress), disclose(fromBal - value as Uint<128>));
+    }
+
+    if (Utils_isKeyOrAddressZero(disclose(to))) {
+      // Burn
+      _totalSupply = disclose(_totalSupply - value as Uint<128>);
+    } else {
+      const toBal = balanceOf(to);
+      _balances.insert(disclose(to), disclose(toBal + value as Uint<128>));
+    }
+  }
+
+  export circuit _mint(account: Either<ZswapCoinPublicKey, ContractAddress>, value: Uint<128>): [] {
+    Initializable_assertInitialized();
+    assert(!Utils_isContractAddress(account), "FungibleToken: Unsafe Transfer");
+    _unsafeMint(account, value);
+  }
+
+  export circuit _unsafeMint(
+                   account: Either<ZswapCoinPublicKey, ContractAddress>,
+                   value: Uint<128>
+                   ): [] {
+    Initializable_assertInitialized();
+    assert(!Utils_isKeyOrAddressZero(account), "FungibleToken: invalid receiver");
+    _update(shieldedBurnAddress(), account, value);
+  }
+
+  export circuit _burn(account: Either<ZswapCoinPublicKey, ContractAddress>, value: Uint<128>): [] {
+    Initializable_assertInitialized();
+    assert(!Utils_isKeyOrAddressZero(account), "FungibleToken: invalid sender");
+    _update(account, shieldedBurnAddress(), value);
+  }
+
+  export circuit _approve(
+                   owner: Either<ZswapCoinPublicKey, ContractAddress>,
+                   spender: Either<ZswapCoinPublicKey, ContractAddress>,
+                   value: Uint<128>
+                   ): [] {
+    Initializable_assertInitialized();
+    assert(!Utils_isKeyOrAddressZero(owner), "FungibleToken: invalid owner");
+    assert(!Utils_isKeyOrAddressZero(spender), "FungibleToken: invalid spender");
+    if (!_allowances.member(disclose(owner))) {
+      _allowances.insert(
+        disclose(owner),
+        default<Map<Either<ZswapCoinPublicKey, ContractAddress>, Uint<128>>>
+        );
+    }
+    _allowances.lookup(owner).insert(disclose(spender), disclose(value));
+  }
+
+  export circuit _spendAllowance(
+                   owner: Either<ZswapCoinPublicKey, ContractAddress>,
+                   spender: Either<ZswapCoinPublicKey, ContractAddress>,
+                   value: Uint<128>
+                   ): [] {
+    Initializable_assertInitialized();
+    assert((_allowances.member(disclose(owner)) &&
+            _allowances.lookup(owner).member(disclose(spender))),
+           "FungibleToken: insufficient allowance"
+           );
+
+    const currentAllowance = _allowances.lookup(owner).lookup(disclose(spender));
+    const MAX_UINT128 = 340282366920938463463374607431768211455;
+    if (currentAllowance < MAX_UINT128) {
+      assert(currentAllowance >= value, "FungibleToken: insufficient allowance");
+      _approve(owner, spender, currentAllowance - value as Uint<128>);
+    }
+  }
+}

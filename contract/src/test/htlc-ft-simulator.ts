@@ -1,5 +1,5 @@
-// HTLC contract test simulator
-// Wraps the compiled HTLC contract for unit testing.
+// HTLC-FT contract test simulator
+// Wraps the compiled HTLC-FT contract (FungibleToken + HTLC escrow) for testing.
 
 import {
   type CircuitContext,
@@ -12,8 +12,11 @@ import {
 import {
   Contract,
   type Ledger,
+  type Either,
+  type ZswapCoinPublicKey,
+  type ContractAddress,
   ledger,
-} from "../managed/htlc/contract/index.js";
+} from "../managed/htlc-ft/contract/index.js";
 import {
   NetworkId,
   setNetworkId,
@@ -21,32 +24,19 @@ import {
 
 setNetworkId("undeployed" as NetworkId);
 
-// The HTLC contract has no witnesses and no private state.
 type EmptyPrivateState = Record<string, never>;
 
-export type QualifiedCoin = {
-  nonce: Uint8Array;
-  color: Uint8Array;
-  value: bigint;
-  mt_index: bigint;
-};
-
-export type CoinInfo = {
-  nonce: Uint8Array;
-  color: Uint8Array;
-  value: bigint;
-};
-
-export type SendResult = {
-  change: { is_some: boolean; value: CoinInfo };
-  sent: CoinInfo;
-};
-
-export class HTLCSimulator {
+export class HTLCFTSimulator {
   readonly contract: Contract<EmptyPrivateState>;
   circuitContext: CircuitContext<EmptyPrivateState>;
 
-  constructor(coinPublicKey: string, blockTimeSeconds?: number) {
+  constructor(
+    coinPublicKey: string,
+    tokenName: string,
+    tokenSymbol: string,
+    tokenDecimals: bigint,
+    blockTimeSeconds?: number,
+  ) {
     this.contract = new Contract<EmptyPrivateState>({});
 
     const {
@@ -55,6 +45,9 @@ export class HTLCSimulator {
       currentZswapLocalState,
     } = this.contract.initialState(
       createConstructorContext({} as EmptyPrivateState, coinPublicKey),
+      tokenName,
+      tokenSymbol,
+      tokenDecimals,
     );
 
     this.circuitContext = {
@@ -98,71 +91,86 @@ export class HTLCSimulator {
     return result;
   }
 
-  mintToSelf(
-    domainSep: Uint8Array,
-    value: bigint,
-    nonce: Uint8Array,
-  ): CoinInfo {
-    const mtIndexBefore =
-      this.circuitContext.currentZswapLocalState.currentIndex;
-    const { context, result } = this.contract.impureCircuits.mintToSelf(
+  /** Build an Either<ZswapCoinPublicKey, ContractAddress> for the current user. */
+  callerAddress(): Either<ZswapCoinPublicKey, ContractAddress> {
+    const bytes = this.myAddr();
+    return {
+      is_left: true,
+      left: { bytes },
+      right: { bytes: new Uint8Array(32) },
+    };
+  }
+
+  // ===== FungibleToken operations =====
+
+  totalSupply(): bigint {
+    const { context, result } = this.contract.impureCircuits.totalSupply(
       this.circuitContext,
-      domainSep,
-      value,
-      nonce,
     );
     this.circuitContext = context;
     return result;
   }
 
-  /** Mint a coin and return it as a QualifiedCoin ready for deposit/send. */
-  mintQualifiedCoin(
-    domainSep: Uint8Array,
-    value: bigint,
-    nonce: Uint8Array,
-  ): QualifiedCoin {
-    const mtIndex =
-      this.circuitContext.currentZswapLocalState.currentIndex;
-    const coin = this.mintToSelf(domainSep, value, nonce);
-    return { ...coin, mt_index: mtIndex };
+  balanceOf(account: Either<ZswapCoinPublicKey, ContractAddress>): bigint {
+    const { context, result } = this.contract.impureCircuits.balanceOf(
+      this.circuitContext,
+      account,
+    );
+    this.circuitContext = context;
+    return result;
   }
 
+  mint(account: Either<ZswapCoinPublicKey, ContractAddress>, value: bigint): void {
+    const { context } = this.contract.impureCircuits.mint(
+      this.circuitContext,
+      account,
+      value,
+    );
+    this.circuitContext = context;
+  }
+
+  transfer(to: Either<ZswapCoinPublicKey, ContractAddress>, value: bigint): boolean {
+    const { context, result } = this.contract.impureCircuits.transfer(
+      this.circuitContext,
+      to,
+      value,
+    );
+    this.circuitContext = context;
+    return result;
+  }
+
+  // ===== HTLC operations =====
+
   deposit(
-    coinInfo: QualifiedCoin,
+    amount: bigint,
     hash: Uint8Array,
     expiryTime: bigint,
     receiver: Uint8Array,
-  ): SendResult {
-    const { context, result } =
+  ): void {
+    const { context } =
       this.contract.impureCircuits.depositWithHashTimeLock(
         this.circuitContext,
-        coinInfo,
+        amount,
         hash,
         expiryTime,
         receiver,
       );
     this.circuitContext = context;
-    return result;
   }
 
-  withdraw(preimage: Uint8Array, mtIndex: bigint): SendResult {
-    const { context, result } =
+  withdraw(preimage: Uint8Array): void {
+    const { context } =
       this.contract.impureCircuits.withdrawWithPreimage(
         this.circuitContext,
         preimage,
-        mtIndex,
       );
     this.circuitContext = context;
-    return result;
   }
 
-  reclaim(mtIndex: bigint): SendResult {
-    const { context, result } =
-      this.contract.impureCircuits.reclaimAfterExpiry(
-        this.circuitContext,
-        mtIndex,
-      );
+  reclaim(): void {
+    const { context } = this.contract.impureCircuits.reclaimAfterExpiry(
+      this.circuitContext,
+    );
     this.circuitContext = context;
-    return result;
   }
 }
