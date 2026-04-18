@@ -41,6 +41,8 @@ import {
 import { MidnightBech32m, UnshieldedAddress } from '@midnight-ntwrk/wallet-sdk-address-format';
 import { getNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 import { createHash } from 'node:crypto';
+// CardanoHTLC is loaded dynamically to avoid libsodium ESM issues with ts-node
+type CardanoHTLC = import('./cardano-htlc').CardanoHTLC;
 
 // @ts-expect-error: It's needed to enable WebSocket usage through apollo
 globalThis.WebSocket = WebSocket;
@@ -167,6 +169,7 @@ const deployOrJoin = async (
 
 const MAIN_MENU = `
 === HTLC-FT Cross-Chain Atomic Swap ===
+ ── Midnight ──
   1.  Mint tokens
   2.  Check balance
   3.  Get my address
@@ -177,13 +180,21 @@ const MAIN_MENU = `
   8.  Generate new preimage
   9.  Transfer tokens
   10. Display contract address
-  11. Exit
+ ── Cardano ──
+  11. Cardano: Lock ADA (create HTLC)
+  12. Cardano: Claim with preimage
+  13. Cardano: Reclaim after deadline
+  14. Cardano: List HTLCs at script
+  15. Cardano: Wallet info
+ ── System ──
+  16. Exit
 Which would you like to do? `;
 
 const mainLoop = async (
   providers: HTLCFTProviders,
   contract: DeployedHTLCFTContract,
   myAddressBytes: Uint8Array,
+  cardano: CardanoHTLC | null,
   rli: Interface,
   logger: Logger,
 ): Promise<void> => {
@@ -366,8 +377,85 @@ const mainLoop = async (
           break;
         }
 
+        // ── Cardano: Lock ADA ──
+        case '11': {
+          if (!cardano) { logger.error('Cardano not configured.'); break; }
+          const adaStr = await rli.question('Amount in ADA to lock: ');
+          const lovelace = BigInt(Math.floor(parseFloat(adaStr) * 1_000_000));
+
+          const hashHex = await rli.question('Hash lock (64 hex chars): ');
+          if (hashHex.length !== 64) { logger.error('Hash lock must be 64 hex chars.'); break; }
+
+          const receiverPkh = await rli.question('Receiver payment key hash (56 hex chars): ');
+          if (receiverPkh.length !== 56) { logger.error('PKH must be 56 hex chars.'); break; }
+
+          const deadlineMin = await rli.question('Deadline in minutes from now [60]: ');
+          const mins = parseInt(deadlineMin || '60', 10);
+          const deadlineMs = BigInt(Date.now() + mins * 60 * 1000);
+          logger.info(`Deadline: ${new Date(Number(deadlineMs)).toISOString()}`);
+
+          const txHash = await cardano.lock(lovelace, hashHex, receiverPkh, deadlineMs);
+          logger.info(`Cardano HTLC created! Tx: ${txHash}`);
+          break;
+        }
+
+        // ── Cardano: Claim with preimage ──
+        case '12': {
+          if (!cardano) { logger.error('Cardano not configured.'); break; }
+          const preimageHex = await rli.question('Preimage (64 hex chars): ');
+          if (preimageHex.length !== 64) { logger.error('Preimage must be 64 hex chars.'); break; }
+          const txHash = await cardano.claim(preimageHex);
+          logger.info(`Cardano HTLC claimed! Tx: ${txHash}`);
+          break;
+        }
+
+        // ── Cardano: Reclaim after deadline ──
+        case '13': {
+          if (!cardano) { logger.error('Cardano not configured.'); break; }
+          const hashForReclaim = await rli.question('Hash lock to reclaim (64 hex chars): ');
+          if (hashForReclaim.length !== 64) { logger.error('Hash lock must be 64 hex chars.'); break; }
+          const txHash = await cardano.reclaim(hashForReclaim);
+          logger.info(`Cardano HTLC reclaimed! Tx: ${txHash}`);
+          break;
+        }
+
+        // ── Cardano: List HTLCs ──
+        case '14': {
+          if (!cardano) { logger.error('Cardano not configured.'); break; }
+          logger.info(`Script address: ${cardano.scriptAddress}`);
+          const htlcs = await cardano.listHTLCs();
+          if (htlcs.length === 0) {
+            logger.info('No HTLCs found at script address.');
+          } else {
+            for (const { utxo, datum } of htlcs) {
+              const active = Date.now() < Number(datum.deadline);
+              logger.info(`─── HTLC ───`);
+              logger.info(`  TxHash: ${utxo.txHash}#${utxo.outputIndex}`);
+              logger.info(`  Amount: ${utxo.assets.lovelace} lovelace (${Number(utxo.assets.lovelace) / 1_000_000} ADA)`);
+              logger.info(`  Hash lock: ${datum.preimageHash}`);
+              logger.info(`  Sender: ${datum.sender}`);
+              logger.info(`  Receiver: ${datum.receiver}`);
+              logger.info(`  Deadline: ${new Date(Number(datum.deadline)).toISOString()}`);
+              logger.info(`  Status: ${active ? 'ACTIVE' : 'EXPIRED'}`);
+            }
+          }
+          break;
+        }
+
+        // ── Cardano: Wallet info ──
+        case '15': {
+          if (!cardano) { logger.error('Cardano not configured.'); break; }
+          const addr = await cardano.getWalletAddress();
+          const pkh = await cardano.getPaymentKeyHash();
+          const balance = await cardano.getBalance();
+          logger.info(`Cardano address: ${addr}`);
+          logger.info(`Payment key hash: ${pkh}`);
+          logger.info(`Balance: ${balance} lovelace (${Number(balance) / 1_000_000} ADA)`);
+          break;
+        }
+
         // ── Exit ──
-        case '11':
+        case '16':
           logger.info('Exiting...');
           return;
 
@@ -472,11 +560,35 @@ export const run = async (config: Config, testEnv: TestEnvironment, logger: Logg
       midnightProvider: walletProvider,
     };
 
+    // Initialize Cardano HTLC (optional — only if config has Cardano settings)
+    let cardano: CardanoHTLC | null = null;
+    if (config.cardano && config.cardano.blockfrostApiKey) {
+      logger.info('Initializing Cardano HTLC...');
+      const { CardanoHTLC: CardanoHTLCClass } = await import('./cardano-htlc');
+      cardano = await CardanoHTLCClass.init(
+        {
+          blockfrostUrl: config.cardano.blockfrostUrl,
+          blockfrostApiKey: config.cardano.blockfrostApiKey,
+          network: config.cardano.cardanoNetwork,
+          blueprintPath: config.cardano.blueprintPath,
+        },
+        logger,
+      );
+      const cardanoSeed = await rli.question('Enter Cardano wallet mnemonic (24 words): ');
+      cardano.selectWalletFromSeed(cardanoSeed.trim());
+      const cardanoAddr = await cardano.getWalletAddress();
+      const cardanoBalance = await cardano.getBalance();
+      logger.info(`Cardano wallet: ${cardanoAddr}`);
+      logger.info(`Cardano balance: ${cardanoBalance} lovelace (${Number(cardanoBalance) / 1_000_000} ADA)`);
+    } else {
+      logger.info('Cardano not configured (set BLOCKFROST_API_KEY env var to enable).');
+    }
+
     // Deploy or join a contract, then enter the main loop
     const contract = await deployOrJoin(providers, rli, logger);
     if (contract === null) return;
 
-    await mainLoop(providers, contract, myAddressBytes, rli, logger);
+    await mainLoop(providers, contract, myAddressBytes, cardano, rli, logger);
   } catch (e) {
     logError(logger, e);
     logger.info('Exiting...');

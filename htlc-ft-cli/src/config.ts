@@ -8,6 +8,13 @@ import {
 import { setNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 import { Logger } from 'pino';
 
+export interface CardanoConfig {
+  readonly blockfrostUrl: string;
+  readonly blockfrostApiKey: string;
+  readonly cardanoNetwork: 'Preview' | 'Preprod' | 'Mainnet';
+  readonly blueprintPath: string;
+}
+
 export interface Config {
   readonly privateStateStoreName: string;
   readonly logDir: string;
@@ -15,6 +22,7 @@ export interface Config {
   getEnvironment(logger: Logger): TestEnvironment;
   readonly requestFaucetTokens: boolean;
   readonly generateDust: boolean;
+  readonly cardano?: CardanoConfig;
 }
 
 export const currentDir = path.resolve(new URL(import.meta.url).pathname, '..');
@@ -41,6 +49,12 @@ export class LocalDevConfig implements Config {
   zkConfigPath = path.resolve(currentDir, '..', '..', 'contract', 'src', 'managed', 'htlc-ft');
   requestFaucetTokens = false;
   generateDust = false;
+  cardano: CardanoConfig = {
+    blockfrostUrl: 'https://cardano-preview.blockfrost.io/api/v0',
+    blockfrostApiKey: process.env.BLOCKFROST_API_KEY ?? '',
+    cardanoNetwork: 'Preview',
+    blueprintPath: path.resolve(currentDir, '..', '..', 'cardano', 'plutus.json'),
+  };
 }
 
 export class LocalDevTestEnvironment extends RemoteTestEnvironment {
