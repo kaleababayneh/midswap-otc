@@ -27,7 +27,7 @@
     "@lucid-evolution/provider": "^0.1.90",
     "@midnight-ntwrk/compact-js": "^2.5.0",
     "@midnight-ntwrk/compact-runtime": "^0.15.0",
-    "@midnight-ntwrk/dapp-connector-api": "^4.0.0",
+    "@midnight-ntwrk/dapp-connector-api": "^4.0.1",
     "@midnight-ntwrk/ledger-v8": "^8.0.0",
     "@midnight-ntwrk/midnight-js-compact": "^4.0.0",
     "@midnight-ntwrk/midnight-js-contracts": "^4.0.0",
