@@ -18,14 +18,19 @@ export interface CardanoHTLCInfo {
 
 /**
  * Poll Cardano for new HTLC UTxOs at the script address.
- * Optionally filter by receiver PKH (to find HTLCs addressed to a specific party).
+ * Optionally filter by receiver PKH (to find HTLCs addressed to a specific party)
+ * and/or by preimage hash (to lock onto a specific counterparty-provided HTLC).
+ * The hash filter is critical when the script address holds concurrent locks:
+ * without it the watcher might latch onto the wrong UTxO.
  */
 export async function watchForCardanoLock(
   cardanoHtlc: CardanoHTLC,
   receiverPkh?: string,
   pollIntervalMs = 10_000,
+  hashHex?: string,
 ): Promise<CardanoHTLCInfo> {
   console.log('  Watching Cardano for HTLC locks...');
+  if (hashHex) console.log(`  Filtering by preimage hash: ${hashHex.slice(0, 16)}...`);
 
   const seen = new Set<string>();
 
@@ -40,6 +45,12 @@ export async function watchForCardanoLock(
 
         // Filter by receiver if specified
         if (receiverPkh && datum.receiver !== receiverPkh) continue;
+
+        // Filter by hash if specified — binds this watcher to a specific
+        // counterparty-declared preimage hash, preventing race conditions
+        // where a different concurrent HTLC at the shared script address
+        // could be picked up instead of the one we're actually swapping.
+        if (hashHex && datum.preimageHash !== hashHex) continue;
 
         // Skip stale HTLCs whose deadline is already in the past — they're
         // reclaimable by the sender, not swappable. Orphans from prior runs

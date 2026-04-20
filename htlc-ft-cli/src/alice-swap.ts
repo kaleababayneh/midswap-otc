@@ -203,6 +203,26 @@ async function main() {
   const lockTxHash = await aliceCardano.lock(lovelaceAmount, hashHex, bobPkh, deadlineMs);
   console.log(`Lock tx: ${lockTxHash}`);
 
+  // Publish the hash so Bob's watcher can lock onto this specific HTLC instead
+  // of latching onto the first lock with a matching receiver PKH — which can
+  // be wrong when the script address holds concurrent locks from other runs.
+  const pendingSwapPath = path.resolve(scriptDir, '..', 'pending-swap.json');
+  fs.writeFileSync(
+    pendingSwapPath,
+    JSON.stringify(
+      {
+        hashHex,
+        lockTxHash,
+        adaAmount: adaAmount.toString(),
+        deadlineMs: deadlineMs.toString(),
+        createdAt: new Date().toISOString(),
+      },
+      null,
+      2,
+    ),
+  );
+  console.log(`Published hash to ${path.relative(process.cwd(), pendingSwapPath)}`);
+
   // ── Wait for Bob's USDC deposit on Midnight ──
   console.log('\n── Waiting for Bob to deposit USDC on Midnight ──');
   console.log('(Bob should run bob-swap.ts now)\n');

@@ -189,7 +189,31 @@ async function main() {
   console.log('(Alice should run alice-swap.ts now)\n');
 
   const bobPkh = addresses.bob.cardano.paymentKeyHash;
-  const htlcInfo = await watchForCardanoLock(bobCardano, bobPkh);
+
+  // Lock onto a specific hash when possible. Without this, Bob's watcher
+  // returns the first lock at the shared script address with a matching
+  // receiver PKH, which can be an unrelated concurrent HTLC.
+  const hashArgIdx = process.argv.indexOf('--hash');
+  const cliHashHex = hashArgIdx >= 0 ? process.argv[hashArgIdx + 1] : undefined;
+  const envHashHex = process.env.SWAP_HASH;
+  let fileHashHex: string | undefined;
+  const pendingSwapPath = path.resolve(scriptDir, '..', 'pending-swap.json');
+  if (fs.existsSync(pendingSwapPath)) {
+    try {
+      const pending = JSON.parse(fs.readFileSync(pendingSwapPath, 'utf-8'));
+      if (typeof pending.hashHex === 'string') fileHashHex = pending.hashHex;
+    } catch {
+      // corrupt pending-swap.json — ignore, fall through to no filter
+    }
+  }
+  const expectedHashHex = cliHashHex ?? envHashHex ?? fileHashHex;
+  if (expectedHashHex) {
+    console.log(`  Expected hash: ${expectedHashHex.slice(0, 32)}...`);
+  } else {
+    console.log('  (no hash filter — will match first fresh lock for Bob)');
+  }
+
+  const htlcInfo = await watchForCardanoLock(bobCardano, bobPkh, 10_000, expectedHashHex);
 
   const adaLocked = Number(htlcInfo.amountLovelace) / 1_000_000;
   const deadlineDate = new Date(Number(htlcInfo.deadlineMs));
