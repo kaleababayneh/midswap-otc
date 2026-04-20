@@ -1,0 +1,49 @@
+// USD Coin (USDC) — native unshielded token on Midnight.
+//
+// Mints native Zswap unshielded coins (via mintUnshieldedToken). Coins live
+// directly in user wallets and transfer at the Zswap layer — there is no
+// internal balance map. Analogous to how ADA lives in Cardano UTXOs.
+//
+// The contract stores only metadata and the deterministic token color that
+// identifies coins of this type.
+
+pragma language_version >= 0.21.0;
+
+import CompactStandardLibrary;
+
+export { ZswapCoinPublicKey, ContractAddress, UserAddress, Either };
+
+// Metadata (set once at deploy).
+export sealed ledger _name: Opaque<"string">;
+export sealed ledger _symbol: Opaque<"string">;
+export sealed ledger _decimals: Uint<8>;
+export sealed ledger _domainSep: Bytes<32>;
+
+// Token color — identical across mints since domainSep + contract address
+// fully determine it. Captured on first mint so clients can read it directly.
+export ledger _color: Bytes<32>;
+
+constructor(
+  tokenName: Opaque<"string">,
+  tokenSymbol: Opaque<"string">,
+  tokenDecimals: Uint<8>,
+  domainSep: Bytes<32>
+) {
+  _name = disclose(tokenName);
+  _symbol = disclose(tokenSymbol);
+  _decimals = disclose(tokenDecimals);
+  _domainSep = disclose(domainSep);
+}
+
+export circuit mint(
+  recipient: Either<ContractAddress, UserAddress>,
+  amount: Uint<64>
+): [] {
+  const color = mintUnshieldedToken(_domainSep, disclose(amount), disclose(recipient));
+  _color = color;
+}
+
+export circuit name(): Opaque<"string"> { return _name; }
+export circuit symbol(): Opaque<"string"> { return _symbol; }
+export circuit decimals(): Uint<8> { return _decimals; }
+export circuit color(): Bytes<32> { return _color; }

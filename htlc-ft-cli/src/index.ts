@@ -1,8 +1,11 @@
-// HTLC-FT CLI: Cross-chain atomic swap on Midnight preprod.
+// HTLC CLI: Cross-chain atomic swap on Midnight + Cardano.
 //
-// Replaces the bboard CLI with HTLC-FT contract operations:
-// deploy, mint, deposit (create swap), withdraw (claim), reclaim (refund),
-// balance check, and swap status queries.
+// The HTLC contract is a pure, color-parametric escrow over native
+// Midnight unshielded tokens. Token issuance (e.g. USDC) lives on a
+// separate contract; use `npm run setup` and `npm run mint-usdc` for
+// initial deployment + minting, and `npm run swap:alice` / `swap:bob`
+// for the full two-party flow. This interactive menu covers the
+// primitive HTLC operations plus the Cardano side.
 
 import { createInterface, type Interface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
@@ -17,41 +20,39 @@ import { levelPrivateStateProvider } from '@midnight-ntwrk/midnight-js-level-pri
 import { type ContractAddress } from '@midnight-ntwrk/compact-runtime';
 import { TestEnvironment } from '@midnight-ntwrk/testkit-js';
 import { MidnightWalletProvider } from './midnight-wallet-provider';
-import { encodeCoinPublicKey, unshieldedToken } from '@midnight-ntwrk/ledger-v8';
+import { unshieldedToken } from '@midnight-ntwrk/ledger-v8';
 import { syncWallet, waitForUnshieldedFunds } from './wallet-utils';
 import { generateDust } from './generate-dust';
 import { deployContract, findDeployedContract } from '@midnight-ntwrk/midnight-js-contracts';
 import {
-  CompiledHTLCFTContract,
-  htlcFtPrivateStateKey,
-  type HTLCFTProviders,
-  type HTLCFTPrivateStateId,
+  CompiledHTLCContract,
+  htlcPrivateStateKey,
+  type HTLCProviders,
+  type HTLCPrivateStateId,
   type EmptyPrivateState,
-  type DeployedHTLCFTContract,
-  type HTLCFTContract,
-  type HTLCFTCircuitKeys,
-} from '../../contract/src/htlc-ft-contract';
+  type DeployedHTLCContract,
+  type HTLCContract,
+  type HTLCCircuitKeys,
+} from '../../contract/src/htlc-contract';
 import {
   ledger,
   type Ledger,
   type Either,
-  type ZswapCoinPublicKey,
   type ContractAddress as CompactContractAddress,
-} from '../../contract/src/managed/htlc-ft/contract/index.js';
+  type UserAddress,
+} from '../../contract/src/managed/htlc/contract/index.js';
 import { MidnightBech32m, UnshieldedAddress } from '@midnight-ntwrk/wallet-sdk-address-format';
 import { getNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 import { createHash } from 'node:crypto';
-// CardanoHTLC is loaded dynamically to avoid libsodium ESM issues with ts-node
 type CardanoHTLC = import('./cardano-htlc').CardanoHTLC;
 
 // @ts-expect-error: It's needed to enable WebSocket usage through apollo
 globalThis.WebSocket = WebSocket;
 
 // ─────────────────────────────────────────────────────────────────────
-// Hex helpers
+// Hex / address helpers
 // ─────────────────────────────────────────────────────────────────────
 
-/** Parse an address in either hex (64 chars) or bech32m (mn_addr_...) format → 32-byte Uint8Array. */
 function parseAddress(input: string): Uint8Array {
   const trimmed = input.trim();
   if (trimmed.startsWith('mn_')) {
@@ -86,20 +87,20 @@ function randomBytes(n: number): Uint8Array {
   return bytes;
 }
 
+function userEither(userAddrBytes: Uint8Array): Either<CompactContractAddress, UserAddress> {
+  return {
+    is_left: false,
+    left: { bytes: new Uint8Array(32) },
+    right: { bytes: userAddrBytes },
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Contract interaction helpers
 // ─────────────────────────────────────────────────────────────────────
 
-function callerAddr(addrBytes: Uint8Array): Either<ZswapCoinPublicKey, CompactContractAddress> {
-  return {
-    is_left: true,
-    left: { bytes: addrBytes },
-    right: { bytes: new Uint8Array(32) },
-  };
-}
-
 const getLedgerState = async (
-  providers: HTLCFTProviders,
+  providers: HTLCProviders,
   contractAddress: ContractAddress,
 ): Promise<Ledger | null> => {
   const contractState = await providers.publicDataProvider.queryContractState(contractAddress);
@@ -112,31 +113,25 @@ const getLedgerState = async (
 
 const DEPLOY_OR_JOIN_QUESTION = `
 You can do one of the following:
-  1. Deploy a new HTLC-FT contract
-  2. Join an existing HTLC-FT contract
+  1. Deploy a new HTLC contract
+  2. Join an existing HTLC contract
   3. Exit
 Which would you like to do? `;
 
 const deployOrJoin = async (
-  providers: HTLCFTProviders,
+  providers: HTLCProviders,
   rli: Interface,
   logger: Logger,
-): Promise<DeployedHTLCFTContract | null> => {
+): Promise<DeployedHTLCContract | null> => {
   while (true) {
     const choice = await rli.question(DEPLOY_OR_JOIN_QUESTION);
     switch (choice) {
       case '1': {
-        const tokenName = (await rli.question('Token name [SwapToken]: ')) || 'SwapToken';
-        const tokenSymbol = (await rli.question('Token symbol [SWAP]: ')) || 'SWAP';
-        const decimalsStr = (await rli.question('Token decimals [6]: ')) || '6';
-        const decimals = BigInt(decimalsStr);
-
-        logger.info(`Deploying HTLC-FT contract (${tokenName} / ${tokenSymbol} / ${decimals} decimals)...`);
+        logger.info('Deploying HTLC contract (pure escrow)...');
         const deployed = await deployContract(providers, {
-          compiledContract: CompiledHTLCFTContract,
-          privateStateId: htlcFtPrivateStateKey,
+          compiledContract: CompiledHTLCContract,
+          privateStateId: htlcPrivateStateKey,
           initialPrivateState: {} as EmptyPrivateState,
-          args: [tokenName, tokenSymbol, decimals],
         });
         const addr = deployed.deployTxData.public.contractAddress;
         logger.info(`Contract deployed at: ${addr}`);
@@ -145,10 +140,10 @@ const deployOrJoin = async (
       case '2': {
         const addr = await rli.question('Contract address (hex): ');
         logger.info(`Joining contract at ${addr}...`);
-        const deployed = await findDeployedContract<HTLCFTContract>(providers, {
+        const deployed = await findDeployedContract<HTLCContract>(providers, {
           contractAddress: addr as ContractAddress,
-          compiledContract: CompiledHTLCFTContract,
-          privateStateId: htlcFtPrivateStateKey,
+          compiledContract: CompiledHTLCContract,
+          privateStateId: htlcPrivateStateKey,
           initialPrivateState: {} as EmptyPrivateState,
         });
         logger.info(`Joined contract at: ${deployed.deployTxData.public.contractAddress}`);
@@ -168,73 +163,45 @@ const deployOrJoin = async (
 // ─────────────────────────────────────────────────────────────────────
 
 const MAIN_MENU = `
-=== HTLC-FT Cross-Chain Atomic Swap ===
- ── Midnight ──
-  1.  Mint tokens
-  2.  Check balance
-  3.  Get my address
-  4.  Deposit (create HTLC swap)
-  5.  Withdraw (claim with preimage)
-  6.  Reclaim (refund after expiry)
-  7.  Check swap status
-  8.  Generate new preimage
-  9.  Transfer tokens
-  10. Display contract address
+=== HTLC Cross-Chain Atomic Swap ===
+ ── Midnight HTLC ──
+  1. Deposit (lock native tokens under hash lock)
+  2. Withdraw (claim with preimage — reveals it on-chain)
+  3. Reclaim (refund after expiry)
+  4. Check swap status by hash
+  5. Generate new preimage + hash
+  6. Display contract address
  ── Cardano ──
-  11. Cardano: Lock ADA (create HTLC)
-  12. Cardano: Claim with preimage
-  13. Cardano: Reclaim after deadline
-  14. Cardano: List HTLCs at script
-  15. Cardano: Wallet info
+  7. Cardano: Lock ADA (create HTLC)
+  8. Cardano: Claim with preimage
+  9. Cardano: Reclaim after deadline
+  10. Cardano: List HTLCs at script
+  11. Cardano: Wallet info
  ── System ──
-  16. Exit
+  12. Exit
 Which would you like to do? `;
 
 const mainLoop = async (
-  providers: HTLCFTProviders,
-  contract: DeployedHTLCFTContract,
-  myAddressBytes: Uint8Array,
+  providers: HTLCProviders,
+  contract: DeployedHTLCContract,
+  myCoinPubKey: Uint8Array,
+  myUnshieldedAddr: Uint8Array,
   cardano: CardanoHTLC | null,
   rli: Interface,
   logger: Logger,
 ): Promise<void> => {
   const contractAddress = contract.deployTxData.public.contractAddress;
-  const myAddr = callerAddr(myAddressBytes);
 
   while (true) {
     const choice = await rli.question(MAIN_MENU);
     try {
       switch (choice) {
-        // ── Mint ──
+        // ── Deposit ──
         case '1': {
-          const amountStr = await rli.question('Amount to mint: ');
-          const amount = BigInt(amountStr);
-          logger.info(`Minting ${amount} tokens to self...`);
-          await contract.callTx.mint(myAddr, amount);
-          logger.info(`Minted ${amount} tokens successfully.`);
-          break;
-        }
+          const colorHex = await rli.question('Token color (64 hex chars): ');
+          const color = hexToBytes(colorHex);
+          if (color.length !== 32) { logger.error('Color must be 32 bytes.'); break; }
 
-        // ── Balance ──
-        case '2': {
-          logger.info('Querying balance...');
-          await contract.callTx.balanceOf(myAddr);
-          // Also query ledger directly for swap info
-          const state = await getLedgerState(providers, contractAddress);
-          if (state) {
-            logger.info(`Active entries in swap map: ${state.htlcAmounts.size()}`);
-          }
-          break;
-        }
-
-        // ── Get my address ──
-        case '3': {
-          logger.info(`Your address (coin public key): ${bytesToHex(myAddressBytes)}`);
-          break;
-        }
-
-        // ── Deposit (create HTLC) ──
-        case '4': {
           const amountStr = await rli.question('Amount to escrow: ');
           const amount = BigInt(amountStr);
 
@@ -248,137 +215,120 @@ const mainLoop = async (
             logger.info(`Generated preimage: ${bytesToHex(preimage)}`);
             logger.info('SAVE THIS PREIMAGE! You need it to claim on the other chain.');
           }
-
-          if (preimage.length !== 32) {
-            logger.error('Preimage must be exactly 32 bytes.');
-            break;
-          }
+          if (preimage.length !== 32) { logger.error('Preimage must be 32 bytes.'); break; }
 
           const hashLock = sha256(preimage);
           logger.info(`Hash lock: ${bytesToHex(hashLock)}`);
 
-          const receiverInput = await rli.question('Receiver address (hex or mn_addr_...): ');
-          const receiverBytes = parseAddress(receiverInput);
+          const receiverAuthHex = await rli.question("Receiver's ZswapCoinPublicKey (64 hex chars): ");
+          const receiverAuth = hexToBytes(receiverAuthHex);
+          if (receiverAuth.length !== 32) { logger.error('Auth key must be 32 bytes.'); break; }
+
+          const receiverAddrInput = await rli.question("Receiver's unshielded address (hex or mn_addr_...): ");
+          const receiverAddr = parseAddress(receiverAddrInput);
 
           const expiryMinutes = await rli.question('Expiry in minutes from now [60]: ');
           const minutes = parseInt(expiryMinutes || '60', 10);
           const expiryTime = BigInt(Math.floor(Date.now() / 1000) + minutes * 60);
-          logger.info(`Expiry time: ${new Date(Number(expiryTime) * 1000).toISOString()}`);
+          logger.info(`Expiry: ${new Date(Number(expiryTime) * 1000).toISOString()}`);
 
-          logger.info(`Depositing ${amount} tokens with hash lock...`);
-          await contract.callTx.depositWithHashTimeLock(amount, hashLock, expiryTime, receiverBytes);
-          logger.info('Deposit successful! HTLC swap created.');
+          logger.info(`Depositing ${amount} of color ${bytesToHex(color).slice(0, 16)}... under hash lock...`);
+          await contract.callTx.deposit(
+            color,
+            amount,
+            hashLock,
+            expiryTime,
+            receiverAuth,
+            userEither(receiverAddr),
+            userEither(myUnshieldedAddr),
+          );
+          logger.info('Deposit successful! HTLC created.');
           logger.info(`Hash lock: ${bytesToHex(hashLock)}`);
           break;
         }
 
-        // ── Withdraw (claim with preimage) ──
-        case '5': {
+        // ── Withdraw ──
+        case '2': {
           const preimageHex = await rli.question('Preimage (64 hex chars): ');
           const preimage = hexToBytes(preimageHex);
-          if (preimage.length !== 32) {
-            logger.error('Preimage must be exactly 32 bytes.');
-            break;
-          }
+          if (preimage.length !== 32) { logger.error('Preimage must be 32 bytes.'); break; }
           const hash = sha256(preimage);
-          logger.info(`Computed hash lock: ${bytesToHex(hash)}`);
-          logger.info('Withdrawing with preimage...');
+          logger.info(`Computed hash: ${bytesToHex(hash)}`);
+          logger.info('Withdrawing and revealing preimage on-chain...');
           await contract.callTx.withdrawWithPreimage(preimage);
-          logger.info('Withdraw successful! Tokens claimed.');
+          logger.info('Withdraw successful! Native tokens sent to your wallet.');
           break;
         }
 
-        // ── Reclaim (refund after expiry) ──
-        case '6': {
+        // ── Reclaim ──
+        case '3': {
           const hashHex = await rli.question('Hash lock of swap to reclaim (64 hex chars): ');
           const hash = hexToBytes(hashHex);
-          if (hash.length !== 32) {
-            logger.error('Hash must be exactly 32 bytes.');
-            break;
-          }
+          if (hash.length !== 32) { logger.error('Hash must be 32 bytes.'); break; }
           logger.info('Reclaiming after expiry...');
           await contract.callTx.reclaimAfterExpiry(hash);
-          logger.info('Reclaim successful! Tokens returned.');
+          logger.info('Reclaim successful!');
           break;
         }
 
-        // ── Check swap status ──
-        case '7': {
-          const hashHex = await rli.question('Hash lock to check (64 hex chars): ');
-          if (!hashHex.trim()) {
-            logger.error('Hash lock cannot be empty.');
-            break;
-          }
+        // ── Check status ──
+        case '4': {
+          const hashHex = await rli.question('Hash lock (64 hex chars): ');
+          if (!hashHex.trim()) { logger.error('Hash cannot be empty.'); break; }
           const hash = hexToBytes(hashHex);
           const state = await getLedgerState(providers, contractAddress);
-          if (!state) {
-            logger.info('Could not fetch contract state.');
-            break;
-          }
+          if (!state) { logger.info('Could not fetch contract state.'); break; }
           if (!state.htlcAmounts.member(hash)) {
             logger.info('No swap found for this hash.');
           } else {
             const amount = state.htlcAmounts.lookup(hash);
             const active = amount > 0n;
-            logger.info(`Swap active: ${active}`);
             logger.info(`Escrowed amount: ${amount}`);
             if (active) {
               const expiry = state.htlcExpiries.lookup(hash);
-              const sender = state.htlcSenders.lookup(hash);
-              const receiver = state.htlcReceivers.lookup(hash);
-              logger.info(`Expiry: ${new Date(Number(expiry) * 1000).toISOString()}`);
-              logger.info(`Sender: ${bytesToHex(sender)}`);
-              logger.info(`Receiver: ${bytesToHex(receiver)}`);
+              const color = state.htlcColors.lookup(hash);
+              const senderAuth = state.htlcSenderAuth.lookup(hash);
+              const receiverAuth = state.htlcReceiverAuth.lookup(hash);
+              logger.info(`Color:    ${bytesToHex(color)}`);
+              logger.info(`Expiry:   ${new Date(Number(expiry) * 1000).toISOString()}`);
+              logger.info(`Sender:   ${bytesToHex(senderAuth)}`);
+              logger.info(`Receiver: ${bytesToHex(receiverAuth)}`);
               const now = Math.floor(Date.now() / 1000);
               if (now > Number(expiry)) {
                 logger.info('Status: EXPIRED (sender can reclaim)');
               } else {
-                const remaining = Number(expiry) - now;
-                const mins = Math.floor(remaining / 60);
+                const mins = Math.floor((Number(expiry) - now) / 60);
                 logger.info(`Status: ACTIVE (${mins} minutes remaining)`);
               }
             } else {
               logger.info('Status: COMPLETED');
+              if (state.revealedPreimages.member(hash)) {
+                logger.info(`Revealed preimage: ${bytesToHex(state.revealedPreimages.lookup(hash))}`);
+              }
             }
           }
           break;
         }
 
-        // ── Generate new preimage ──
-        case '8': {
+        // ── Generate preimage ──
+        case '5': {
           const preimage = randomBytes(32);
           const hash = sha256(preimage);
           logger.info(`Preimage: ${bytesToHex(preimage)}`);
           logger.info(`Hash:     ${bytesToHex(hash)}`);
-          logger.info('Use this preimage for your next deposit or Cardano HTLC.');
           break;
         }
 
-        // ── Transfer tokens ──
-        case '9': {
-          const toInput = await rli.question('Recipient address (hex or mn_addr_...): ');
-          const toBytes = parseAddress(toInput);
-          const amountStr = await rli.question('Amount to transfer: ');
-          const amount = BigInt(amountStr);
-          const toAddr: Either<ZswapCoinPublicKey, CompactContractAddress> = {
-            is_left: true,
-            left: { bytes: toBytes },
-            right: { bytes: new Uint8Array(32) },
-          };
-          logger.info(`Transferring ${amount} tokens...`);
-          await contract.callTx.transfer(toAddr, amount);
-          logger.info('Transfer successful.');
-          break;
-        }
-
-        // ── Display contract address ──
-        case '10': {
+        // ── Contract address ──
+        case '6': {
           logger.info(`Contract address: ${contractAddress}`);
+          logger.info(`My coin pub key:  ${bytesToHex(myCoinPubKey)}`);
+          logger.info(`My unshielded:    ${bytesToHex(myUnshieldedAddr)}`);
           break;
         }
 
-        // ── Cardano: Lock ADA ──
-        case '11': {
+        // ── Cardano: Lock ──
+        case '7': {
           if (!cardano) { logger.error('Cardano not configured.'); break; }
           const adaStr = await rli.question('Amount in ADA to lock: ');
           const lovelace = BigInt(Math.floor(parseFloat(adaStr) * 1_000_000));
@@ -399,8 +349,8 @@ const mainLoop = async (
           break;
         }
 
-        // ── Cardano: Claim with preimage ──
-        case '12': {
+        // ── Cardano: Claim ──
+        case '8': {
           if (!cardano) { logger.error('Cardano not configured.'); break; }
           const preimageHex = await rli.question('Preimage (64 hex chars): ');
           if (preimageHex.length !== 64) { logger.error('Preimage must be 64 hex chars.'); break; }
@@ -409,8 +359,8 @@ const mainLoop = async (
           break;
         }
 
-        // ── Cardano: Reclaim after deadline ──
-        case '13': {
+        // ── Cardano: Reclaim ──
+        case '9': {
           if (!cardano) { logger.error('Cardano not configured.'); break; }
           const hashForReclaim = await rli.question('Hash lock to reclaim (64 hex chars): ');
           if (hashForReclaim.length !== 64) { logger.error('Hash lock must be 64 hex chars.'); break; }
@@ -419,8 +369,8 @@ const mainLoop = async (
           break;
         }
 
-        // ── Cardano: List HTLCs ──
-        case '14': {
+        // ── Cardano: List ──
+        case '10': {
           if (!cardano) { logger.error('Cardano not configured.'); break; }
           logger.info(`Script address: ${cardano.scriptAddress}`);
           const htlcs = await cardano.listHTLCs();
@@ -430,32 +380,32 @@ const mainLoop = async (
             for (const { utxo, datum } of htlcs) {
               const active = Date.now() < Number(datum.deadline);
               logger.info(`─── HTLC ───`);
-              logger.info(`  TxHash: ${utxo.txHash}#${utxo.outputIndex}`);
-              logger.info(`  Amount: ${utxo.assets.lovelace} lovelace (${Number(utxo.assets.lovelace) / 1_000_000} ADA)`);
+              logger.info(`  TxHash:    ${utxo.txHash}#${utxo.outputIndex}`);
+              logger.info(`  Amount:    ${utxo.assets.lovelace} lovelace (${Number(utxo.assets.lovelace) / 1_000_000} ADA)`);
               logger.info(`  Hash lock: ${datum.preimageHash}`);
-              logger.info(`  Sender: ${datum.sender}`);
-              logger.info(`  Receiver: ${datum.receiver}`);
-              logger.info(`  Deadline: ${new Date(Number(datum.deadline)).toISOString()}`);
-              logger.info(`  Status: ${active ? 'ACTIVE' : 'EXPIRED'}`);
+              logger.info(`  Sender:    ${datum.sender}`);
+              logger.info(`  Receiver:  ${datum.receiver}`);
+              logger.info(`  Deadline:  ${new Date(Number(datum.deadline)).toISOString()}`);
+              logger.info(`  Status:    ${active ? 'ACTIVE' : 'EXPIRED'}`);
             }
           }
           break;
         }
 
         // ── Cardano: Wallet info ──
-        case '15': {
+        case '11': {
           if (!cardano) { logger.error('Cardano not configured.'); break; }
           const addr = await cardano.getWalletAddress();
           const pkh = await cardano.getPaymentKeyHash();
           const balance = await cardano.getBalance();
-          logger.info(`Cardano address: ${addr}`);
+          logger.info(`Cardano address:  ${addr}`);
           logger.info(`Payment key hash: ${pkh}`);
           logger.info(`Balance: ${balance} lovelace (${Number(balance) / 1_000_000} ADA)`);
           break;
         }
 
         // ── Exit ──
-        case '16':
+        case '12':
           logger.info('Exiting...');
           return;
 
@@ -505,7 +455,7 @@ export const run = async (config: Config, testEnv: TestEnvironment, logger: Logg
   const rli = createInterface({ input, output, terminal: true });
   const providersToBeStopped: MidnightWalletProvider[] = [];
   try {
-    logger.info('Starting HTLC-FT CLI for cross-chain atomic swaps...');
+    logger.info('Starting HTLC CLI for cross-chain atomic swaps...');
     const envConfiguration = await testEnv.start();
     logger.info(`Environment started with configuration: ${JSON.stringify(envConfiguration)}`);
 
@@ -540,17 +490,16 @@ export const run = async (config: Config, testEnv: TestEnvironment, logger: Logg
       }
     }
 
-    // Derive the user's coin public key (used as contract address identity)
     const coinPubKey = walletProvider.getCoinPublicKey();
-    const myAddressBytes = encodeCoinPublicKey(coinPubKey);
+    const myCoinPubKey = hexToBytes(coinPubKey);
+    const myUnshieldedAddr = new Uint8Array(unshieldedState.address.data);
 
-    // Build providers for the HTLC-FT contract
-    const zkConfigProvider = new NodeZkConfigProvider<HTLCFTCircuitKeys>(config.zkConfigPath);
-    const providers: HTLCFTProviders = {
-      privateStateProvider: levelPrivateStateProvider<HTLCFTPrivateStateId, EmptyPrivateState>({
+    const zkConfigProvider = new NodeZkConfigProvider<HTLCCircuitKeys>(config.zkConfigPath);
+    const providers: HTLCProviders = {
+      privateStateProvider: levelPrivateStateProvider<HTLCPrivateStateId, EmptyPrivateState>({
         privateStateStoreName: config.privateStateStoreName,
         signingKeyStoreName: `${config.privateStateStoreName}-signing-keys`,
-        privateStoragePasswordProvider: () => 'HtlcFt-Test-2026!',
+        privateStoragePasswordProvider: () => 'Htlc-Interactive-Cli-2026!',
         accountId: seed,
       }),
       publicDataProvider: indexerPublicDataProvider(envConfiguration.indexer, envConfiguration.indexerWS),
@@ -560,7 +509,6 @@ export const run = async (config: Config, testEnv: TestEnvironment, logger: Logg
       midnightProvider: walletProvider,
     };
 
-    // Initialize Cardano HTLC (optional — only if config has Cardano settings)
     let cardano: CardanoHTLC | null = null;
     if (config.cardano && config.cardano.blockfrostApiKey) {
       logger.info('Initializing Cardano HTLC...');
@@ -584,11 +532,10 @@ export const run = async (config: Config, testEnv: TestEnvironment, logger: Logg
       logger.info('Cardano not configured (set BLOCKFROST_API_KEY env var to enable).');
     }
 
-    // Deploy or join a contract, then enter the main loop
     const contract = await deployOrJoin(providers, rli, logger);
     if (contract === null) return;
 
-    await mainLoop(providers, contract, myAddressBytes, cardano, rli, logger);
+    await mainLoop(providers, contract, myCoinPubKey, myUnshieldedAddr, cardano, rli, logger);
   } catch (e) {
     logError(logger, e);
     logger.info('Exiting...');

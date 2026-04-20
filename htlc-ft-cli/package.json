@@ -7,7 +7,14 @@
   "scripts": {
     "local-dev": "node --experimental-specifier-resolution=node --loader ts-node/esm src/launcher/local-dev.ts",
     "preprod-remote": "node --experimental-specifier-resolution=node --loader ts-node/esm src/launcher/preprod.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "setup": "node --experimental-specifier-resolution=node --loader ts-node/esm src/setup-contract.ts",
+    "mint-usdc": "node --experimental-specifier-resolution=node --loader ts-node/esm src/mint-usdc.ts",
+    "swap:alice": "node --experimental-specifier-resolution=node --loader ts-node/esm src/alice-swap.ts",
+    "swap:bob": "node --experimental-specifier-resolution=node --loader ts-node/esm src/bob-swap.ts",
+    "mint-tnight": "node --experimental-specifier-resolution=node --loader ts-node/esm src/mint-tnight.ts",
+    "check-balance": "node --experimental-specifier-resolution=node --loader ts-node/esm src/check-balance.ts",
+    "check-midnight": "node --experimental-specifier-resolution=node --loader ts-node/esm src/check-midnight-balance.ts"
   },
   "devDependencies": {
     "@types/json-schema": "^7.0.15",

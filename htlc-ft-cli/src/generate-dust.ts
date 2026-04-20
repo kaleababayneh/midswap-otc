@@ -3,6 +3,7 @@ import { createKeystore, UnshieldedWalletState } from '@midnight-ntwrk/wallet-sd
 import { Logger } from 'pino';
 import { HDWallet, Roles } from '@midnight-ntwrk/wallet-sdk-hd';
 import { getNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
+import { nativeToken } from '@midnight-ntwrk/ledger-v8';
 import * as rx from 'rxjs';
 
 export const getUnshieldedSeed = (seed: string): Uint8Array<ArrayBufferLike> => {
@@ -32,10 +33,13 @@ export const generateDust = async (
   const dustState = await walletFacade.dust.waitForSyncedState();
   const networkId = getNetworkId();
   const unshieldedKeystore = createKeystore(getUnshieldedSeed(walletSeed), networkId);
-  const utxos = unshieldedState.availableCoins.filter((coin) => !coin.meta.registeredForDustGeneration);
+  const nightTokenType = nativeToken().raw;
+  const utxos = unshieldedState.availableCoins.filter(
+    (coin) => !coin.meta.registeredForDustGeneration && coin.utxo.type === nightTokenType,
+  );
 
   if (utxos.length === 0) {
-    logger.info('No unregistered UTXOs found for dust generation.');
+    logger.info('No unregistered NIGHT UTXOs found for dust generation.');
     return;
   }
 

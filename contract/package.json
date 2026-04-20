@@ -14,9 +14,11 @@
   },
   "scripts": {
     "build": "rm -rf dist && tsc --project tsconfig.build.json && cp -Rf ./src/managed ./dist/managed && cp ./src/bboard.compact ./dist",
+    "build:all": "rm -rf dist && tsc --project tsconfig.build.json && cp -Rf ./src/managed ./dist/managed && cp ./src/htlc.compact ./dist && cp ./src/usdc.compact ./dist",
     "ci": "npm run compact && npm run typecheck && npm run lint && npm run build && npm run test",
     "compact": "compact compile src/bboard.compact ./src/managed/bboard",
-    "compact:htlc": "compact compile src/htlc-ft.compact ./src/managed/htlc-ft",
+    "compact:htlc": "compact compile src/htlc.compact ./src/managed/htlc",
+    "compact:usdc": "compact compile src/usdc.compact ./src/managed/usdc",
     "lint": "eslint src",
     "prepack": "npm build",
     "test": "vitest",

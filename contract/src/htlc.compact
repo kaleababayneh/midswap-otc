@@ -1,0 +1,102 @@
+// Generic hash-time-lock contract (HTLC) for native Midnight unshielded
+// tokens. Acts as a pure escrow — it pulls coins of an arbitrary `color`
+// in via receiveUnshielded, holds them under a hash lock, and pushes them
+// out via sendUnshielded to either the receiver (withdraw with preimage)
+// or back to the sender (reclaim after expiry).
+//
+// No internal balance bookkeeping — the Zswap layer tracks unshielded
+// coins natively. Per-swap state (amount / expiry / parties / color) is
+// tracked in parallel Maps keyed by hash lock so multiple swaps can be
+// active concurrently.
+//
+// Authentication uses ZswapCoinPublicKey (ownPublicKey().bytes), separate
+// from the UserAddress used for payout, because Compact exposes no
+// primitive to derive one from the other inside a circuit.
+
+pragma language_version >= 0.21.0;
+
+import CompactStandardLibrary;
+
+export { ZswapCoinPublicKey, ContractAddress, UserAddress, Either };
+
+// ===== HTLC state (parallel Maps keyed by hash lock) =====
+export ledger htlcAmounts: Map<Bytes<32>, Uint<128>>;
+export ledger htlcExpiries: Map<Bytes<32>, Uint<64>>;
+export ledger htlcColors: Map<Bytes<32>, Bytes<32>>;
+
+// Authentication keys (ZswapCoinPublicKey bytes, for asserting caller identity).
+export ledger htlcSenderAuth: Map<Bytes<32>, Bytes<32>>;
+export ledger htlcReceiverAuth: Map<Bytes<32>, Bytes<32>>;
+
+// Payout destinations (Either<ContractAddress, UserAddress> for sendUnshielded).
+export ledger htlcSenderPayout: Map<Bytes<32>, Either<ContractAddress, UserAddress>>;
+export ledger htlcReceiverPayout: Map<Bytes<32>, Either<ContractAddress, UserAddress>>;
+
+// Preimages revealed by a successful withdraw — lets the counterparty on
+// another chain discover the preimage by reading contract state.
+export ledger revealedPreimages: Map<Bytes<32>, Bytes<32>>;
+
+// Deposit native unshielded coins of `color` under a hash lock. Supports
+// concurrent swaps: distinct hashes live in parallel map entries.
+export circuit deposit(
+  color: Bytes<32>,
+  amount: Uint<128>,
+  hash: Bytes<32>,
+  expiryTime: Uint<64>,
+  receiverAuth: Bytes<32>,
+  receiverPayout: Either<ContractAddress, UserAddress>,
+  senderPayout: Either<ContractAddress, UserAddress>
+): [] {
+  // Fresh or already-completed slot (amount == 0 sentinel since Map.delete is unavailable).
+  assert(!htlcAmounts.member(disclose(hash)) || htlcAmounts.lookup(disclose(hash)) == 0,
+         "HTLC already active for this hash");
+  assert(blockTimeLt(disclose(expiryTime)), "Expiry must be in the future");
+
+  // Pull coins from the transaction into this contract.
+  receiveUnshielded(disclose(color), disclose(amount));
+
+  htlcAmounts.insert(disclose(hash), disclose(amount));
+  htlcExpiries.insert(disclose(hash), disclose(expiryTime));
+  htlcColors.insert(disclose(hash), disclose(color));
+  htlcSenderAuth.insert(disclose(hash), disclose(ownPublicKey().bytes));
+  htlcReceiverAuth.insert(disclose(hash), disclose(receiverAuth));
+  htlcSenderPayout.insert(disclose(hash), disclose(senderPayout));
+  htlcReceiverPayout.insert(disclose(hash), disclose(receiverPayout));
+}
+
+// Claim coins by revealing the preimage — the hash is derived from the
+// preimage so the caller proves they know it without sending it separately.
+export circuit withdrawWithPreimage(preimage: Bytes<32>): [] {
+  const hash = persistentHash<Bytes<32>>(disclose(preimage));
+
+  assert(htlcAmounts.member(hash) && htlcAmounts.lookup(hash) > 0, "No active HTLC");
+  assert(blockTimeLte(htlcExpiries.lookup(hash)), "HTLC has expired");
+  assert(ownPublicKey().bytes == htlcReceiverAuth.lookup(hash),
+         "Only designated receiver can withdraw");
+
+  const amount = htlcAmounts.lookup(hash);
+  const color = htlcColors.lookup(hash);
+  const payout = htlcReceiverPayout.lookup(hash);
+  sendUnshielded(color, amount, payout);
+
+  // Reveal the preimage so the counterparty chain can observe it.
+  revealedPreimages.insert(hash, disclose(preimage));
+  // Sentinel: mark this swap completed.
+  htlcAmounts.insert(hash, 0);
+}
+
+// Reclaim coins after the HTLC has expired — only the original sender.
+export circuit reclaimAfterExpiry(hash: Bytes<32>): [] {
+  assert(htlcAmounts.member(disclose(hash)) && htlcAmounts.lookup(disclose(hash)) > 0,
+         "No active HTLC");
+  assert(blockTimeGt(htlcExpiries.lookup(disclose(hash))), "HTLC has not expired yet");
+  assert(ownPublicKey().bytes == htlcSenderAuth.lookup(disclose(hash)),
+         "Only original sender can reclaim");
+
+  const amount = htlcAmounts.lookup(disclose(hash));
+  const color = htlcColors.lookup(disclose(hash));
+  const payout = htlcSenderPayout.lookup(disclose(hash));
+  sendUnshielded(color, amount, payout);
+
+  htlcAmounts.insert(disclose(hash), 0);
+}

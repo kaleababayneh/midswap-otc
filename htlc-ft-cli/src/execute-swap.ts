@@ -1,15 +1,16 @@
 /**
- * Cross-Chain Atomic Swap: Alice's ADA ↔ Bob's SWAP tokens
+ * Cross-Chain Atomic Swap: Alice's ADA ↔ Bob's native USDC.
  *
  * Flow:
- *   1. Bob deploys HTLC-FT contract on Midnight, mints SWAP tokens
- *   2. Alice generates preimage, locks ADA on Cardano HTLC
- *   3. Bob sees the lock, deposits SWAP tokens on Midnight HTLC (same hash)
- *   4. Alice claims SWAP tokens on Midnight (reveals preimage)
- *   5. Bob sees preimage, claims ADA on Cardano
+ *   0. Bob deploys USDC (native unshielded token) + HTLC (pure escrow).
+ *   1. Bob mints USDC to himself.
+ *   2. Alice generates preimage and locks ADA on Cardano HTLC.
+ *   3. Bob sees the lock, deposits native USDC on Midnight HTLC (same hash).
+ *   4. Alice claims USDC on Midnight via withdrawWithPreimage — reveals preimage.
+ *   5. Bob reads the preimage from Midnight state and claims ADA on Cardano.
  *
  * Usage:
- *   node --loader ts-node/esm src/execute-swap.ts
+ *   npx tsx src/execute-swap.ts
  */
 
 import * as crypto from 'node:crypto';
@@ -25,26 +26,34 @@ import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-p
 import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
 import { levelPrivateStateProvider } from '@midnight-ntwrk/midnight-js-level-private-state-provider';
 import { deployContract, findDeployedContract } from '@midnight-ntwrk/midnight-js-contracts';
-import { encodeCoinPublicKey, unshieldedToken } from '@midnight-ntwrk/ledger-v8';
+import { unshieldedToken } from '@midnight-ntwrk/ledger-v8';
 import { setNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 import { type EnvironmentConfiguration } from '@midnight-ntwrk/testkit-js';
+import { type ContractAddress } from '@midnight-ntwrk/compact-runtime';
 import { generateDust } from './generate-dust';
 import {
-  CompiledHTLCFTContract,
-  htlcFtPrivateStateKey,
-  type HTLCFTProviders,
-  type HTLCFTPrivateStateId,
-  type EmptyPrivateState,
-  type HTLCFTCircuitKeys,
-} from '../../contract/src/htlc-ft-contract';
+  CompiledHTLCContract,
+  htlcPrivateStateKey,
+  type HTLCProviders,
+  type HTLCPrivateStateId,
+  type EmptyPrivateState as HTLCEmpty,
+  type HTLCCircuitKeys,
+} from '../../contract/src/htlc-contract';
 import {
-  ledger,
+  CompiledUSDCContract,
+  usdcPrivateStateKey,
+  type USDCProviders,
+  type USDCPrivateStateId,
+  type EmptyPrivateState as USDCEmpty,
+  type USDCCircuitKeys,
+} from '../../contract/src/usdc-contract';
+import { ledger as htlcLedger } from '../../contract/src/managed/htlc/contract/index.js';
+import { ledger as usdcLedger } from '../../contract/src/managed/usdc/contract/index.js';
+import {
   type Either,
-  type ZswapCoinPublicKey,
   type ContractAddress as CompactContractAddress,
-} from '../../contract/src/managed/htlc-ft/contract/index.js';
-import { type ContractAddress } from '@midnight-ntwrk/compact-runtime';
-import { currentDir } from './config.js';
+  type UserAddress,
+} from '../../contract/src/managed/htlc/contract/index.js';
 
 // @ts-expect-error: Needed for WebSocket usage through apollo
 globalThis.WebSocket = WebSocket;
@@ -53,15 +62,18 @@ globalThis.WebSocket = WebSocket;
 // Config
 // ─────────────────────────────────────────────────────────────────────
 
-const SWAP_AMOUNT_ADA = 10n;                           // 10 ADA
-const SWAP_AMOUNT_LOVELACE = SWAP_AMOUNT_ADA * 1_000_000n; // 10,000,000 lovelace
-const SWAP_AMOUNT_TOKENS = 10n;                        // 10 SWAP tokens
-const MINT_AMOUNT = 100n;                              // Bob mints 100 total
-const CARDANO_DEADLINE_MIN = 120;                      // Alice's Cardano lock: 2 hours
-const MIDNIGHT_DEADLINE_MIN = 60;                      // Bob's Midnight lock: 1 hour (must be < Cardano)
+const SWAP_AMOUNT_ADA = 10n;
+const SWAP_AMOUNT_LOVELACE = SWAP_AMOUNT_ADA * 1_000_000n;
+const SWAP_AMOUNT_USDC = 10n;
+const MINT_AMOUNT = 100n;
+const CARDANO_DEADLINE_MIN = 120;
+const MIDNIGHT_DEADLINE_MIN = 60;
+const TOKEN_NAME = 'USD Coin';
+const TOKEN_SYMBOL = 'USDC';
+const TOKEN_DECIMALS = 6n;
+const DOMAIN_SEP_SOURCE = 'midnight-usdc-swap-v1';
 
 const scriptDir = path.resolve(new URL(import.meta.url).pathname, '..');
-const zkConfigPath = path.resolve(scriptDir, '..', '..', 'contract', 'src', 'managed', 'htlc-ft');
 
 const env: EnvironmentConfiguration = {
   walletNetworkId: 'undeployed',
@@ -86,8 +98,18 @@ function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-function callerAddr(addrBytes: Uint8Array): Either<ZswapCoinPublicKey, CompactContractAddress> {
-  return { is_left: true, left: { bytes: addrBytes }, right: { bytes: new Uint8Array(32) } };
+function hexToBytes(hex: string): Uint8Array {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < hex.length; i += 2) out[i / 2] = parseInt(hex.slice(i, i + 2), 16);
+  return out;
+}
+
+function userEither(userAddrHex: string): Either<CompactContractAddress, UserAddress> {
+  return {
+    is_left: false,
+    left: { bytes: new Uint8Array(32) },
+    right: { bytes: hexToBytes(userAddrHex) },
+  };
 }
 
 function loadEnv(): void {
@@ -111,25 +133,48 @@ function banner(step: string): void {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Build providers for a participant
+// Providers
 // ─────────────────────────────────────────────────────────────────────
 
-function buildProviders(
+function buildHtlcProviders(
   walletProvider: MidnightWalletProvider,
   storeName: string,
   seed: string,
-): HTLCFTProviders {
-  const zkConfig = new NodeZkConfigProvider<HTLCFTCircuitKeys>(zkConfigPath);
+): HTLCProviders {
+  const zkConfigPath = path.resolve(scriptDir, '..', '..', 'contract', 'src', 'managed', 'htlc');
+  const zk = new NodeZkConfigProvider<HTLCCircuitKeys>(zkConfigPath);
   return {
-    privateStateProvider: levelPrivateStateProvider<HTLCFTPrivateStateId, EmptyPrivateState>({
+    privateStateProvider: levelPrivateStateProvider<HTLCPrivateStateId, HTLCEmpty>({
       privateStateStoreName: storeName,
-      signingKeyStoreName: `${storeName}-signing-keys`,
-      privateStoragePasswordProvider: () => 'HtlcFt-Test-2026!',
+      signingKeyStoreName: `${storeName}-keys`,
+      privateStoragePasswordProvider: () => 'Htlc-Swap-Regression-2026!',
       accountId: seed,
     }),
     publicDataProvider: indexerPublicDataProvider(env.indexer, env.indexerWS),
-    zkConfigProvider: zkConfig,
-    proofProvider: httpClientProofProvider(env.proofServer, zkConfig),
+    zkConfigProvider: zk,
+    proofProvider: httpClientProofProvider(env.proofServer, zk),
+    walletProvider: walletProvider,
+    midnightProvider: walletProvider,
+  };
+}
+
+function buildUsdcProviders(
+  walletProvider: MidnightWalletProvider,
+  storeName: string,
+  seed: string,
+): USDCProviders {
+  const zkConfigPath = path.resolve(scriptDir, '..', '..', 'contract', 'src', 'managed', 'usdc');
+  const zk = new NodeZkConfigProvider<USDCCircuitKeys>(zkConfigPath);
+  return {
+    privateStateProvider: levelPrivateStateProvider<USDCPrivateStateId, USDCEmpty>({
+      privateStateStoreName: storeName,
+      signingKeyStoreName: `${storeName}-keys`,
+      privateStoragePasswordProvider: () => 'Usdc-Swap-Regression-2026!',
+      accountId: seed,
+    }),
+    publicDataProvider: indexerPublicDataProvider(env.indexer, env.indexerWS),
+    zkConfigProvider: zk,
+    proofProvider: httpClientProofProvider(env.proofServer, zk),
     walletProvider: walletProvider,
     midnightProvider: walletProvider,
   };
@@ -162,24 +207,22 @@ async function main() {
 
   banner('STEP 0: Initialize wallets');
 
-  // ── Midnight wallets ──
   console.log('Building Alice Midnight wallet...');
   const aliceWallet = await MidnightWalletProvider.build(logger, env, addresses.alice.midnight.seed);
   await aliceWallet.start();
   console.log('Syncing Alice...');
   const aliceUnshielded = await waitForUnshieldedFunds(logger, aliceWallet.wallet, env, unshieldedToken());
 
-  console.log('Registering Alice for dust generation...');
   const aliceDustTx = await generateDust(logger, addresses.alice.midnight.seed, aliceUnshielded, aliceWallet.wallet);
   if (aliceDustTx) {
     console.log(`Alice dust registration tx: ${aliceDustTx}`);
     await syncWallet(logger, aliceWallet.wallet);
   }
 
+  const aliceUserAddrHex = addresses.alice.midnight.unshieldedAddressHex;
   const aliceCoinPubKey = aliceWallet.getCoinPublicKey();
-  const aliceAddrBytes = encodeCoinPublicKey(aliceCoinPubKey);
-  const aliceAddr = callerAddr(aliceAddrBytes);
-  console.log(`Alice Midnight address: ${aliceCoinPubKey}`);
+  const aliceAuthBytes = hexToBytes(addresses.alice.midnight.coinPublicKey);
+  console.log(`Alice coin pubkey: ${aliceCoinPubKey}`);
 
   console.log('Building Bob Midnight wallet...');
   const bobWallet = await MidnightWalletProvider.build(logger, env, addresses.bob.midnight.seed);
@@ -187,19 +230,18 @@ async function main() {
   console.log('Syncing Bob...');
   const bobUnshielded = await waitForUnshieldedFunds(logger, bobWallet.wallet, env, unshieldedToken());
 
-  console.log('Registering Bob for dust generation...');
   const bobDustTx = await generateDust(logger, addresses.bob.midnight.seed, bobUnshielded, bobWallet.wallet);
   if (bobDustTx) {
     console.log(`Bob dust registration tx: ${bobDustTx}`);
     await syncWallet(logger, bobWallet.wallet);
   }
 
+  const bobUserAddrHex = addresses.bob.midnight.unshieldedAddressHex;
   const bobCoinPubKey = bobWallet.getCoinPublicKey();
-  const bobAddrBytes = encodeCoinPublicKey(bobCoinPubKey);
-  const bobAddr = callerAddr(bobAddrBytes);
-  console.log(`Bob Midnight address: ${bobCoinPubKey}`);
+  const bobAuthBytes = hexToBytes(addresses.bob.midnight.coinPublicKey);
+  console.log(`Bob coin pubkey: ${bobCoinPubKey}`);
 
-  // ── Cardano wallets (dynamic import to avoid libsodium ESM issues) ──
+  // Cardano wallets
   console.log('Initializing Cardano wallets...');
   const { CardanoHTLC: CardanoHTLCClass } = await import('./cardano-htlc');
   const cardanoConfig = {
@@ -220,26 +262,47 @@ async function main() {
   console.log(`Bob Cardano balance: ${Number(bobAdaBal) / 1_000_000} ADA`);
 
   // ══════════════════════════════════════════════════════════════════
-  // STEP 1: Bob deploys HTLC-FT contract and mints SWAP tokens
+  // STEP 1: Bob deploys USDC + HTLC, mints USDC to himself
   // ══════════════════════════════════════════════════════════════════
 
-  banner('STEP 1: Bob deploys contract & mints SWAP tokens');
+  banner('STEP 1: Bob deploys USDC + HTLC & mints USDC');
 
-  const bobProviders = buildProviders(bobWallet, 'htlc-ft-swap-bob', addresses.bob.midnight.seed);
+  const bobUsdcProviders = buildUsdcProviders(bobWallet, 'usdc-swap-bob', addresses.bob.midnight.seed);
+  const bobHtlcProviders = buildHtlcProviders(bobWallet, 'htlc-swap-bob', addresses.bob.midnight.seed);
 
-  console.log('Deploying HTLC-FT contract...');
-  const bobContract = await deployContract(bobProviders, {
-    compiledContract: CompiledHTLCFTContract,
-    privateStateId: htlcFtPrivateStateKey,
-    initialPrivateState: {} as EmptyPrivateState,
-    args: ['SwapToken', 'SWAP', 6n],
+  const domainSep = sha256(new TextEncoder().encode(DOMAIN_SEP_SOURCE));
+  console.log('Deploying USDC contract...');
+  const bobUsdc = await deployContract(bobUsdcProviders, {
+    compiledContract: CompiledUSDCContract,
+    privateStateId: usdcPrivateStateKey,
+    initialPrivateState: {} as USDCEmpty,
+    args: [TOKEN_NAME, TOKEN_SYMBOL, TOKEN_DECIMALS, domainSep],
   });
-  const contractAddress = bobContract.deployTxData.public.contractAddress;
-  console.log(`Contract deployed at: ${contractAddress}`);
+  const usdcAddress = bobUsdc.deployTxData.public.contractAddress;
+  console.log(`USDC deployed at: ${usdcAddress}`);
 
-  console.log(`Minting ${MINT_AMOUNT} SWAP tokens to Bob...`);
-  await bobContract.callTx.mint(bobAddr, MINT_AMOUNT);
+  console.log(`Minting ${MINT_AMOUNT} USDC to Bob...`);
+  const bobRecipient = userEither(bobUserAddrHex);
+  await bobUsdc.callTx.mint(bobRecipient, MINT_AMOUNT);
   console.log('Minted successfully.');
+
+  // Sync so Bob's wallet sees the new USDC coins
+  await syncWallet(logger, bobWallet.wallet);
+
+  // Read USDC color
+  const usdcState = await bobUsdcProviders.publicDataProvider.queryContractState(usdcAddress);
+  if (!usdcState) throw new Error('USDC state not found');
+  const usdcColor = usdcLedger(usdcState.data)._color;
+  console.log(`USDC color: ${bytesToHex(usdcColor)}`);
+
+  console.log('Deploying HTLC contract...');
+  const bobHtlc = await deployContract(bobHtlcProviders, {
+    compiledContract: CompiledHTLCContract,
+    privateStateId: htlcPrivateStateKey,
+    initialPrivateState: {} as HTLCEmpty,
+  });
+  const htlcAddress = bobHtlc.deployTxData.public.contractAddress;
+  console.log(`HTLC deployed at: ${htlcAddress}`);
 
   // ══════════════════════════════════════════════════════════════════
   // STEP 2: Alice generates preimage & locks ADA on Cardano
@@ -247,7 +310,6 @@ async function main() {
 
   banner('STEP 2: Alice locks ADA on Cardano');
 
-  // Generate the atomic swap secret
   const preimage = crypto.randomBytes(32);
   const hashLock = sha256(preimage);
   const preimageHex = bytesToHex(preimage);
@@ -269,7 +331,6 @@ async function main() {
   console.log(`Cardano HTLC lock tx: ${lockTxHash}`);
   console.log('Waiting for Cardano confirmation...');
 
-  // Poll until Bob can see the UTxO
   let cardanoConfirmed = false;
   for (let i = 0; i < 12; i++) {
     await new Promise((r) => setTimeout(r, 5000));
@@ -288,69 +349,82 @@ async function main() {
   }
 
   // ══════════════════════════════════════════════════════════════════
-  // STEP 3: Bob sees the lock, deposits SWAP tokens on Midnight
+  // STEP 3: Bob deposits native USDC on Midnight HTLC
   // ══════════════════════════════════════════════════════════════════
 
-  banner('STEP 3: Bob deposits SWAP tokens on Midnight HTLC');
+  banner('STEP 3: Bob deposits USDC on Midnight HTLC');
 
   const midnightExpiryUnix = BigInt(Math.floor(Date.now() / 1000) + MIDNIGHT_DEADLINE_MIN * 60);
   console.log(`Midnight HTLC expiry: ${new Date(Number(midnightExpiryUnix) * 1000).toISOString()} (${MIDNIGHT_DEADLINE_MIN} min)`);
-  console.log(`Depositing ${SWAP_AMOUNT_TOKENS} SWAP tokens with hash lock ${hashHex}...`);
-  console.log(`Receiver: Alice (${aliceCoinPubKey})`);
+  console.log(`Depositing ${SWAP_AMOUNT_USDC} USDC with hash lock ${hashHex}...`);
+  console.log(`Receiver: Alice`);
 
-  await bobContract.callTx.depositWithHashTimeLock(
-    SWAP_AMOUNT_TOKENS,
-    hashLock,           // 32-byte hash
-    midnightExpiryUnix, // unix timestamp
-    aliceAddrBytes,     // Alice's coin public key bytes
+  const aliceRecipient = userEither(aliceUserAddrHex);
+  const bobSenderPayout = userEither(bobUserAddrHex);
+
+  await bobHtlc.callTx.deposit(
+    usdcColor,
+    SWAP_AMOUNT_USDC,
+    hashLock,
+    midnightExpiryUnix,
+    aliceAuthBytes,    // receiverAuth (Alice's ZswapCoinPublicKey for auth)
+    aliceRecipient,    // receiverPayout
+    bobSenderPayout,   // senderPayout
   );
   console.log('Midnight HTLC deposit confirmed!');
 
-  // Verify on-chain state
-  const state1 = await bobProviders.publicDataProvider.queryContractState(contractAddress);
+  const state1 = await bobHtlcProviders.publicDataProvider.queryContractState(htlcAddress);
   if (state1) {
-    const l = ledger(state1.data);
+    const l = htlcLedger(state1.data);
     const escrowed = l.htlcAmounts.lookup(hashLock);
-    console.log(`On-chain: ${escrowed} SWAP tokens escrowed under hash ${hashHex}`);
+    console.log(`On-chain: ${escrowed} USDC escrowed under hash ${hashHex}`);
   }
 
   // ══════════════════════════════════════════════════════════════════
-  // STEP 4: Alice claims SWAP tokens on Midnight (reveals preimage)
+  // STEP 4: Alice claims USDC on Midnight (reveals preimage)
   // ══════════════════════════════════════════════════════════════════
 
-  banner('STEP 4: Alice claims SWAP tokens on Midnight');
+  banner('STEP 4: Alice claims USDC on Midnight');
 
-  // Alice joins the contract
-  const aliceProviders = buildProviders(aliceWallet, 'htlc-ft-swap-alice', addresses.alice.midnight.seed);
-  console.log('Alice joining the contract...');
-  const aliceContract = await findDeployedContract(aliceProviders, {
-    contractAddress: contractAddress as ContractAddress,
-    compiledContract: CompiledHTLCFTContract,
-    privateStateId: htlcFtPrivateStateKey,
-    initialPrivateState: {} as EmptyPrivateState,
+  const aliceHtlcProviders = buildHtlcProviders(aliceWallet, 'htlc-swap-alice', addresses.alice.midnight.seed);
+  console.log('Alice joining the HTLC contract...');
+  const aliceHtlc = await findDeployedContract(aliceHtlcProviders, {
+    contractAddress: htlcAddress as ContractAddress,
+    compiledContract: CompiledHTLCContract,
+    privateStateId: htlcPrivateStateKey,
+    initialPrivateState: {} as HTLCEmpty,
   });
   console.log('Alice joined.');
 
   console.log(`Revealing preimage: ${preimageHex}`);
-  console.log('Withdrawing SWAP tokens...');
-  await aliceContract.callTx.withdrawWithPreimage(preimage);
-  console.log('Alice claimed SWAP tokens on Midnight!');
+  console.log('Withdrawing USDC...');
+  await aliceHtlc.callTx.withdrawWithPreimage(preimage);
+  console.log('Alice claimed USDC on Midnight!');
 
   // ══════════════════════════════════════════════════════════════════
-  // STEP 5: Bob sees preimage, claims ADA on Cardano
+  // STEP 5: Bob reads preimage from Midnight, claims ADA on Cardano
   // ══════════════════════════════════════════════════════════════════
 
   banner('STEP 5: Bob claims ADA on Cardano');
 
-  // In a real scenario, Bob would watch the Midnight chain for the preimage.
-  // Here we simulate that by passing the preimage directly.
-  console.log(`Bob observed preimage on Midnight: ${preimageHex}`);
-  console.log('Bob claiming ADA from Cardano HTLC...');
+  // Read the preimage from Midnight contract state (revealedPreimages map).
+  const state2 = await bobHtlcProviders.publicDataProvider.queryContractState(htlcAddress);
+  if (!state2) throw new Error('HTLC state not found after withdraw');
+  const l2 = htlcLedger(state2.data);
+  if (!l2.revealedPreimages.member(hashLock)) {
+    throw new Error('Preimage was not revealed on-chain — split flow is broken');
+  }
+  const observedPreimage = l2.revealedPreimages.lookup(hashLock);
+  const observedPreimageHex = bytesToHex(observedPreimage);
+  console.log(`Bob read preimage from Midnight contract state: ${observedPreimageHex}`);
+  if (observedPreimageHex !== preimageHex) {
+    throw new Error(`Preimage mismatch: observed ${observedPreimageHex} vs actual ${preimageHex}`);
+  }
+  console.log('Preimage matches — Bob claiming ADA from Cardano HTLC...');
 
-  const claimTxHash = await bobCardano.claim(preimageHex);
+  const claimTxHash = await bobCardano.claim(observedPreimageHex);
   console.log(`Cardano HTLC claim tx: ${claimTxHash}`);
 
-  // Wait for Cardano confirmation
   console.log('Waiting for Cardano confirmation...');
   await new Promise((r) => setTimeout(r, 30000));
 
@@ -360,33 +434,30 @@ async function main() {
 
   banner('STEP 6: Final balances');
 
-  // Cardano
   const aliceAdaFinal = await aliceCardano.getBalance();
   const bobAdaFinal = await bobCardano.getBalance();
   console.log('── Cardano ──');
   console.log(`  Alice: ${Number(aliceAdaBal) / 1e6} ADA → ${Number(aliceAdaFinal) / 1e6} ADA  (sent ${Number(SWAP_AMOUNT_ADA)} ADA)`);
   console.log(`  Bob:   ${Number(bobAdaBal) / 1e6} ADA → ${Number(bobAdaFinal) / 1e6} ADA  (received ~${Number(SWAP_AMOUNT_ADA)} ADA)`);
 
-  // Midnight
   console.log('── Midnight ──');
-  await aliceContract.callTx.balanceOf(aliceAddr);
-  await bobContract.callTx.balanceOf(bobAddr);
-
-  const state2 = await aliceProviders.publicDataProvider.queryContractState(contractAddress);
-  if (state2) {
-    const l = ledger(state2.data);
+  const state3 = await aliceHtlcProviders.publicDataProvider.queryContractState(htlcAddress);
+  if (state3) {
+    const l = htlcLedger(state3.data);
     const htlcActive = l.htlcAmounts.member(hashLock) && l.htlcAmounts.lookup(hashLock) > 0n;
     console.log(`  HTLC status: ${htlcActive ? 'STILL ACTIVE (unexpected)' : 'COMPLETED'}`);
+    if (l.revealedPreimages.member(hashLock)) {
+      console.log(`  revealedPreimages[hash] = ${bytesToHex(l.revealedPreimages.lookup(hashLock))}`);
+    }
   }
 
   banner('CROSS-CHAIN ATOMIC SWAP COMPLETE');
   console.log(`  Alice gave:     ${SWAP_AMOUNT_ADA} ADA on Cardano`);
-  console.log(`  Alice received: ${SWAP_AMOUNT_TOKENS} SWAP tokens on Midnight`);
-  console.log(`  Bob gave:       ${SWAP_AMOUNT_TOKENS} SWAP tokens on Midnight`);
+  console.log(`  Alice received: ${SWAP_AMOUNT_USDC} USDC on Midnight (native unshielded)`);
+  console.log(`  Bob gave:       ${SWAP_AMOUNT_USDC} USDC on Midnight`);
   console.log(`  Bob received:   ${SWAP_AMOUNT_ADA} ADA on Cardano`);
   console.log();
 
-  // Cleanup
   await aliceWallet.stop();
   await bobWallet.stop();
   process.exit(0);
