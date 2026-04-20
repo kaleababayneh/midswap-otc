@@ -229,7 +229,9 @@ async function main() {
   const bobDeadlineMin = 60;
 
   const nowSecs = Math.floor(Date.now() / 1000);
-  const cardanoDeadlineSecs = Number(htlcInfo.deadlineMs) / 1000;
+  // Floor to integer — Cardano datum may hold sub-second precision (ms), but
+  // BigInt() rejects fractional numbers, so we need an integer seconds value.
+  const cardanoDeadlineSecs = Math.floor(Number(htlcInfo.deadlineMs) / 1000);
   const cardanoRemaining = cardanoDeadlineSecs - nowSecs;
 
   if (cardanoRemaining < MIN_CARDANO_DEADLINE_WINDOW_SECS) {

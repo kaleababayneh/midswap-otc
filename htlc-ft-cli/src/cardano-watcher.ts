@@ -41,6 +41,11 @@ export async function watchForCardanoLock(
         // Filter by receiver if specified
         if (receiverPkh && datum.receiver !== receiverPkh) continue;
 
+        // Skip stale HTLCs whose deadline is already in the past — they're
+        // reclaimable by the sender, not swappable. Orphans from prior runs
+        // at the script address would otherwise poison fresh swap flows.
+        if (datum.deadline <= BigInt(Date.now())) continue;
+
         const info: CardanoHTLCInfo = {
           hashHex: datum.preimageHash,
           amountLovelace: utxo.assets.lovelace ?? 0n,
