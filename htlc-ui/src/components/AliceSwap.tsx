@@ -20,9 +20,24 @@ import {
   Typography,
 } from '@mui/material';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import { getAddressDetails } from '@lucid-evolution/lucid';
 import { useSwapContext } from '../hooks';
 import { WalletConnect } from './WalletConnect';
 import { bytesToHex, hexToBytes } from '../api/key-encoding';
+
+const resolveBobPkh = (input: string): string | undefined => {
+  const trimmed = input.trim();
+  if (/^[0-9a-fA-F]{56}$/.test(trimmed)) return trimmed.toLowerCase();
+  if (trimmed.startsWith('addr') || trimmed.startsWith('addr_test')) {
+    try {
+      const details = getAddressDetails(trimmed);
+      return details.paymentCredential?.hash?.toLowerCase();
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+};
 
 type Step =
   | { kind: 'connect' }
@@ -139,6 +154,7 @@ export const AliceSwap: React.FC = () => {
   const [deadlineMin, setDeadlineMin] = useState<string>('120');
   const [bobPkh, setBobPkh] = useState<string>('');
   const [formError, setFormError] = useState<string | undefined>(undefined);
+  const resolvedBobPkh = useMemo(() => resolveBobPkh(bobPkh), [bobPkh]);
 
   useEffect(() => {
     if (session && cardano && state.kind === 'connect') {
@@ -184,9 +200,9 @@ export const AliceSwap: React.FC = () => {
       setFormError('ADA and USDC amounts must be positive integers.');
       return;
     }
-    const bobPkhHex = bobPkh.trim().toLowerCase();
-    if (!/^[0-9a-f]{56}$/.test(bobPkhHex)) {
-      setFormError('Bob PKH must be 56 hex characters (28 bytes).');
+    const bobPkhHex = resolvedBobPkh;
+    if (!bobPkhHex) {
+      setFormError("Bob's receiver: paste a Cardano bech32 address (addr_test1…) or 56-hex PKH.");
       return;
     }
 
@@ -215,7 +231,7 @@ export const AliceSwap: React.FC = () => {
     } catch (e) {
       dispatch({ t: 'error', message: e instanceof Error ? e.message : String(e) });
     }
-  }, [session, cardano, adaAmount, usdcAmount, deadlineMin, bobPkh]);
+  }, [session, cardano, adaAmount, usdcAmount, deadlineMin, resolvedBobPkh]);
 
   const startWaiting = useCallback(() => {
     dispatch({ t: 'to-waiting' });
@@ -296,13 +312,21 @@ export const AliceSwap: React.FC = () => {
                 size="small"
               />
               <TextField
-                label="Bob Cardano PKH (28 bytes hex)"
+                label="Bob's Cardano address or PKH"
                 value={bobPkh}
                 onChange={(e) => setBobPkh(e.target.value)}
                 size="small"
+                error={bobPkh.trim().length > 0 && !resolvedBobPkh}
+                helperText={
+                  bobPkh.trim().length === 0
+                    ? "Paste Bob's bech32 address (addr_test1…) from his Eternl 'Receive' screen, or his 56-hex PKH."
+                    : resolvedBobPkh
+                      ? `✓ PKH: ${resolvedBobPkh}`
+                      : 'Not a valid Cardano address or 56-hex PKH.'
+                }
               />
               {formError && <Alert severity="error">{formError}</Alert>}
-              <Button variant="contained" onClick={onLock}>
+              <Button variant="contained" onClick={onLock} disabled={!resolvedBobPkh}>
                 Lock ADA
               </Button>
             </Stack>
