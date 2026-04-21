@@ -187,11 +187,15 @@ async function main() {
   const cliHashHex = hashArgIdx >= 0 ? process.argv[hashArgIdx + 1] : undefined;
   const envHashHex = process.env.SWAP_HASH;
   let fileHashHex: string | undefined;
+  let fileAliceCoinPublicKey: string | undefined;
   const pendingSwapPath = path.resolve(scriptDir, '..', 'pending-swap.json');
   if (fs.existsSync(pendingSwapPath)) {
     try {
       const pending = JSON.parse(fs.readFileSync(pendingSwapPath, 'utf-8'));
       if (typeof pending.hashHex === 'string') fileHashHex = pending.hashHex;
+      if (typeof pending.aliceCoinPublicKey === 'string') {
+        fileAliceCoinPublicKey = pending.aliceCoinPublicKey;
+      }
     } catch {
       // corrupt pending-swap.json — ignore, fall through to no filter
     }
@@ -280,7 +284,29 @@ async function main() {
   const bobDeadlineUnix = BigInt(bobDeadlineSecs);
 
   // Auth = Alice's ZswapCoinPublicKey bytes (to gate withdrawWithPreimage).
-  const aliceAuthBytes = hexToBytes(addresses.alice.midnight.coinPublicKey);
+  // Prefer the runtime-published key from pending-swap.json. The value stored in
+  // address.json (generated offline via the same HD derivation) can diverge from
+  // the wallet's actual ownPublicKey().bytes at runtime — using it causes
+  // Alice's withdraw to fail the "Only designated receiver" assertion.
+  const storedAliceCoinPublicKey: string | undefined = addresses.alice.midnight.coinPublicKey;
+  const aliceCoinPublicKeyHex = fileAliceCoinPublicKey ?? storedAliceCoinPublicKey;
+  if (!aliceCoinPublicKeyHex) {
+    console.error('ERROR: Alice\'s coinPublicKey not found in pending-swap.json or address.json');
+    process.exit(1);
+  }
+  if (fileAliceCoinPublicKey && storedAliceCoinPublicKey &&
+      fileAliceCoinPublicKey !== storedAliceCoinPublicKey) {
+    console.log(
+      `  Note: using Alice's runtime coinPublicKey from pending-swap.json (${fileAliceCoinPublicKey.slice(0, 16)}...); ` +
+        `differs from address.json (${storedAliceCoinPublicKey.slice(0, 16)}...).`,
+    );
+  } else if (!fileAliceCoinPublicKey) {
+    console.warn(
+      '  WARNING: pending-swap.json has no aliceCoinPublicKey — falling back to address.json. ' +
+        'If Alice\'s runtime key differs, her withdraw will fail.',
+    );
+  }
+  const aliceAuthBytes = hexToBytes(aliceCoinPublicKeyHex);
   // Payout = Alice's UserAddress (where sendUnshielded delivers the coins).
   const aliceRecipient = userEither(addresses.alice.midnight.unshieldedAddressHex);
   // Sender payout = Bob's UserAddress (where reclaim would return coins).

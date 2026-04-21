@@ -140,6 +140,17 @@ async function main() {
   const lovelaceAmount = adaAmount * 1_000_000n;
   const deadlineMin = parseInt(deadlineMinStr);
 
+  // Bob's safety gate rejects anything under 30 min; on preprod he also spends
+  // ~15 min on dust sync before he can even check, so require a healthy floor.
+  const MIN_DEADLINE_MIN = 60;
+  if (!Number.isFinite(deadlineMin) || deadlineMin < MIN_DEADLINE_MIN) {
+    console.error(
+      `ERROR: deadline=${deadlineMin}min is below the ${MIN_DEADLINE_MIN}-min floor. ` +
+        `Bob needs ≥30min window + preprod sync time. Re-run with a larger value.`,
+    );
+    process.exit(1);
+  }
+
   const logDir = path.resolve(scriptDir, '..', 'logs', 'alice-swap', `${new Date().toISOString()}.log`);
   const logger = await createLogger(logDir);
 
@@ -152,6 +163,20 @@ async function main() {
   await walletProvider.start();
   const unshielded = await waitForUnshieldedFunds(logger, walletProvider.wallet, env, unshieldedToken());
   await generateDust(logger, aliceSeed, unshielded, walletProvider.wallet);
+
+  // Capture Alice's runtime coinPublicKey. The stored value in address.json is
+  // derived offline and in practice diverges from what the wallet reports at
+  // runtime (debug showed 8520... stored vs b432... runtime for the same seed),
+  // and `ownPublicKey().bytes` in the Compact runtime is the runtime value.
+  // Publish this so Bob's deposit stores the correct receiver auth.
+  const aliceCoinPublicKey = walletProvider.getCoinPublicKey();
+  const storedCoinPublicKey: string | undefined = addresses.alice.midnight.coinPublicKey;
+  console.log(`Alice coinPublicKey (runtime): ${aliceCoinPublicKey}`);
+  if (storedCoinPublicKey && storedCoinPublicKey !== aliceCoinPublicKey) {
+    console.warn(
+      `  NOTE: address.json stores ${storedCoinPublicKey} — runtime value differs and will override.`,
+    );
+  }
 
   console.log('Joining HTLC contract on Midnight...');
   const providers = buildHtlcProviders(walletProvider, aliceSeed);
@@ -205,6 +230,7 @@ async function main() {
         lockTxHash,
         adaAmount: adaAmount.toString(),
         deadlineMs: deadlineMs.toString(),
+        aliceCoinPublicKey,
         createdAt: new Date().toISOString(),
       },
       null,
