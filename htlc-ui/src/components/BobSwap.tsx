@@ -340,7 +340,7 @@ export const BobSwap: React.FC = () => {
           <CardContent>
             <Stack spacing={2} alignItems="center">
               <CircularProgress />
-              <Typography>Depositing USDC on Midnight HTLC. Please sign in Lace.</Typography>
+              <Typography>Depositing USDC on Midnight HTLC. Please sign in 1AM.</Typography>
             </Stack>
           </CardContent>
         </Card>

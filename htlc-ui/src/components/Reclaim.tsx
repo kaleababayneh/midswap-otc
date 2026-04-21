@@ -281,7 +281,7 @@ export const Reclaim: React.FC = () => {
             {usdcStatus.kind === 'reclaiming' && (
               <Stack direction="row" spacing={2} alignItems="center">
                 <CircularProgress size={20} />
-                <Typography>Submitting reclaim. Please sign in Lace.</Typography>
+                <Typography>Submitting reclaim. Please sign in 1AM.</Typography>
               </Stack>
             )}
             {usdcStatus.kind === 'done' && (

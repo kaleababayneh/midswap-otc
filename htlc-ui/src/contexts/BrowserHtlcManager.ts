@@ -25,7 +25,7 @@ import { pipe as fnPipe } from 'fp-ts/function';
 import { type Logger } from 'pino';
 import { ConnectedAPI, type InitialAPI } from '@midnight-ntwrk/dapp-connector-api';
 import { FetchZkConfigProvider } from '@midnight-ntwrk/midnight-js-fetch-zk-config-provider';
-import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
+import { createProofProvider } from '@midnight-ntwrk/midnight-js-types';
 import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
 import semver from 'semver';
 import {
@@ -97,11 +97,11 @@ const connectToWallet = (logger: Logger, networkId: string): Promise<ConnectedAP
       tap((api) => logger.info(api, 'Compatible wallet connector API found. Connecting.')),
       take(1),
       timeout({
-        first: 1_000,
+        first: 5_000,
         with: () =>
           throwError(() => {
             logger.error('Could not find wallet connector API');
-            return new Error('Could not find Midnight Lace wallet. Extension installed?');
+            return new Error('Could not find a Midnight wallet (1AM / Lace). Extension installed?');
           }),
       }),
       concatMap(async (initialAPI) => {
@@ -111,11 +111,11 @@ const connectToWallet = (logger: Logger, networkId: string): Promise<ConnectedAP
         return connectedAPI;
       }),
       timeout({
-        first: 10_000,
+        first: 30_000,
         with: () =>
           throwError(() => {
             logger.error('Wallet connector API has failed to respond');
-            return new Error('Midnight Lace wallet has failed to respond. Extension enabled?');
+            return new Error('Midnight wallet has failed to respond. Extension enabled?');
           }),
       }),
       catchError((error, apis) =>
@@ -128,21 +128,6 @@ const connectToWallet = (logger: Logger, networkId: string): Promise<ConnectedAP
       ),
     ),
   );
-
-const resolveProverServerUri = (reported: string | undefined, logger: Logger): string => {
-  const override = import.meta.env.VITE_PROOF_SERVER_URI as string | undefined;
-  if (override && override.trim().length > 0) {
-    if (reported && reported !== override) {
-      logger.warn({ reported, override }, 'VITE_PROOF_SERVER_URI overrides wallet-reported proverServerUri');
-    }
-    return override;
-  }
-  if (reported && reported.trim().length > 0) return reported;
-  logger.warn(
-    'Wallet did not report proverServerUri and VITE_PROOF_SERVER_URI is unset; defaulting to http://127.0.0.1:6300',
-  );
-  return 'http://127.0.0.1:6300';
-};
 
 const buildWalletProvider = (
   logger: Logger,
@@ -199,7 +184,7 @@ const initializeBootstrap = async (logger: Logger): Promise<SwapBootstrap> => {
   const coinPublicKeyBytes = decodeShieldedCoinPublicKey(shieldedAddresses.shieldedCoinPublicKey, networkId);
   const unshieldedAddressBytes = decodeUnshieldedAddress(unshieldedAddress, networkId);
 
-  const proverServerUri = resolveProverServerUri(config.proverServerUri, logger);
+  logger.info({ indexerUri: config.indexerUri, networkId: config.networkId }, 'Wallet configuration');
 
   const publicDataProvider = indexerPublicDataProvider(config.indexerUri, config.indexerWsUri);
   const walletProvider = buildWalletProvider(
@@ -213,10 +198,13 @@ const initializeBootstrap = async (logger: Logger): Promise<SwapBootstrap> => {
   const htlcPrivateStateProvider = inMemoryPrivateStateProvider<string, EmptyPrivateState>();
   const usdcPrivateStateProvider = inMemoryPrivateStateProvider<string, EmptyPrivateState>();
 
+  const htlcProvingProvider = await connectedAPI.getProvingProvider(htlcZkConfigProvider.asKeyMaterialProvider());
+  const usdcProvingProvider = await connectedAPI.getProvingProvider(usdcZkConfigProvider.asKeyMaterialProvider());
+
   const htlcProviders: HTLCProviders = {
     privateStateProvider: htlcPrivateStateProvider,
     zkConfigProvider: htlcZkConfigProvider,
-    proofProvider: httpClientProofProvider(proverServerUri, htlcZkConfigProvider),
+    proofProvider: createProofProvider(htlcProvingProvider),
     publicDataProvider,
     walletProvider,
     midnightProvider,
@@ -225,7 +213,7 @@ const initializeBootstrap = async (logger: Logger): Promise<SwapBootstrap> => {
   const usdcProviders: USDCProviders = {
     privateStateProvider: usdcPrivateStateProvider,
     zkConfigProvider: usdcZkConfigProvider,
-    proofProvider: httpClientProofProvider(proverServerUri, usdcZkConfigProvider),
+    proofProvider: createProofProvider(usdcProvingProvider),
     publicDataProvider,
     walletProvider,
     midnightProvider,

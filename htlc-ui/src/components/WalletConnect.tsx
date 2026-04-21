@@ -8,7 +8,7 @@ export const WalletConnect: React.FC = () => {
   const [localError, setLocalError] = useState<string | undefined>(undefined);
   const [cardanoLocalError, setCardanoLocalError] = useState<string | undefined>(undefined);
 
-  const onConnectLace = async () => {
+  const onConnectMidnight = async () => {
     setLocalError(undefined);
     try {
       await connect();
@@ -33,7 +33,7 @@ export const WalletConnect: React.FC = () => {
           <Typography variant="h6">Wallets</Typography>
 
           <Stack spacing={1}>
-            <Typography variant="subtitle1">Midnight — Lace</Typography>
+            <Typography variant="subtitle1">Midnight — 1AM</Typography>
             {session ? (
               <Stack spacing={0.5}>
                 <Chip label="Connected" color="success" sx={{ alignSelf: 'flex-start' }} />
@@ -45,8 +45,8 @@ export const WalletConnect: React.FC = () => {
                 </Typography>
               </Stack>
             ) : (
-              <Button variant="contained" onClick={onConnectLace} disabled={connecting}>
-                {connecting ? 'Connecting…' : 'Connect Lace'}
+              <Button variant="contained" onClick={onConnectMidnight} disabled={connecting}>
+                {connecting ? 'Connecting…' : 'Connect 1AM'}
               </Button>
             )}
             {(error || localError) && <Alert severity="error">{localError ?? error?.message}</Alert>}
