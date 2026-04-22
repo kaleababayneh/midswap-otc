@@ -402,9 +402,7 @@ export const AliceSwap: React.FC = () => {
       if (cancelled) return;
       if (
         dbSwap &&
-        (dbSwap.status === 'bob_deposited' ||
-          dbSwap.status === 'alice_claimed' ||
-          dbSwap.status === 'completed')
+        (dbSwap.status === 'bob_deposited' || dbSwap.status === 'alice_claimed' || dbSwap.status === 'completed')
       ) {
         dispatch({
           t: 'deposit-seen',
