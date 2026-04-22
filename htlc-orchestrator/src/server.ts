@@ -9,6 +9,11 @@ import {
 import { openSwapStore } from './db.js';
 import { resolveWatcherConfig, startMidnightWatcher, type MidnightWatcher } from './midnight-watcher.js';
 import { swapsRoutes } from './routes/swaps.js';
+import {
+  resolveStuckAlerterConfig,
+  startStuckAlerter,
+  type StuckAlerter,
+} from './stuck-alerter.js';
 
 const PORT = Number(process.env.PORT ?? 4000);
 const HOST = process.env.HOST ?? '0.0.0.0';
@@ -48,10 +53,17 @@ if (cardanoWatcherConfig) {
   cardanoWatcher = startCardanoWatcher(store, cardanoWatcherConfig, app.log);
 }
 
+let stuckAlerter: StuckAlerter | null = null;
+const stuckAlerterConfig = resolveStuckAlerterConfig(app.log);
+if (stuckAlerterConfig) {
+  stuckAlerter = startStuckAlerter(store, stuckAlerterConfig, app.log);
+}
+
 const shutdown = async (signal: string) => {
   app.log.info({ signal }, 'shutting down');
   midnightWatcher?.stop();
   cardanoWatcher?.stop();
+  stuckAlerter?.stop();
   await app.close();
   store.close();
   process.exit(0);

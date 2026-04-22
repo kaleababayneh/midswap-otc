@@ -9,6 +9,7 @@ import { theme } from './config/theme';
 import '@midnight-ntwrk/dapp-connector-api';
 import * as pino from 'pino';
 import { SwapProvider } from './contexts/SwapContext';
+import { ToastProvider } from './contexts/ToastContext';
 
 const networkId = import.meta.env.VITE_NETWORK_ID as NetworkId;
 setNetworkId(networkId);
@@ -23,9 +24,11 @@ ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
     <CssBaseline />
     <ThemeProvider theme={theme}>
-      <SwapProvider logger={logger}>
-        <App />
-      </SwapProvider>
+      <ToastProvider>
+        <SwapProvider logger={logger}>
+          <App />
+        </SwapProvider>
+      </ToastProvider>
     </ThemeProvider>
   </React.StrictMode>,
 );

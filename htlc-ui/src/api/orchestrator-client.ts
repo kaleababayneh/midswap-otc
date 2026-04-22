@@ -65,7 +65,10 @@ export interface PatchSwapBody {
   status?: SwapStatus;
 }
 
-const BASE_URL = (import.meta.env.VITE_ORCHESTRATOR_URL ?? 'http://localhost:4000').replace(/\/$/, '');
+const BASE_URL = ((import.meta.env.VITE_ORCHESTRATOR_URL as string | undefined) ?? 'http://localhost:4000').replace(
+  /\/$/,
+  '',
+);
 
 const request = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
   const res = await fetch(`${BASE_URL}${path}`, {
@@ -92,8 +95,7 @@ export const orchestratorClient = {
 
   health: () => request<{ ok: boolean; db: string }>('/health'),
 
-  createSwap: (body: CreateSwapBody) =>
-    request<Swap>('/api/swaps', { method: 'POST', body: JSON.stringify(body) }),
+  createSwap: (body: CreateSwapBody) => request<Swap>('/api/swaps', { method: 'POST', body: JSON.stringify(body) }),
 
   listSwaps: (status?: SwapStatus) => {
     const qs = status ? `?status=${encodeURIComponent(status)}` : '';
@@ -107,10 +109,7 @@ export const orchestratorClient = {
 };
 
 /** Fire-and-forget wrapper that swallows errors (logs to console). */
-export const tryOrchestrator = async <T>(
-  action: () => Promise<T>,
-  label: string,
-): Promise<T | undefined> => {
+export const tryOrchestrator = async <T>(action: () => Promise<T>, label: string): Promise<T | undefined> => {
   try {
     return await action();
   } catch (e) {

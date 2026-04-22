@@ -10,7 +10,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useReducer } from 'react';
-import { Alert, Button, Card, CardContent, CircularProgress, Divider, Stack, Typography } from '@mui/material';
+import { Alert, Card, CardContent, CircularProgress, Divider, Stack, Typography } from '@mui/material';
 import { useSearchParams } from 'react-router-dom';
 import { useSwapContext } from '../hooks';
 import { WalletConnect } from './WalletConnect';
@@ -18,6 +18,9 @@ import { watchForCardanoLock, type CardanoHTLCInfo } from '../api/cardano-watche
 import { watchForPreimageReveal } from '../api/midnight-watcher';
 import { bytesToHex, hexToBytes, userEither } from '../api/key-encoding';
 import { orchestratorClient, tryOrchestrator } from '../api/orchestrator-client';
+import { AsyncButton } from './AsyncButton';
+import { limits, describeBobWindow } from '../config/limits';
+import { useToast } from '../hooks/useToast';
 
 const describeError = (e: unknown): string => {
   if (e instanceof Error) {
@@ -38,10 +41,6 @@ const describeError = (e: unknown): string => {
     return String(e);
   }
 };
-
-const SAFETY_BUFFER_SECS = 60; // 10 min
-const MIN_CARDANO_DEADLINE_WINDOW_SECS = 180; // 30 min
-const BOB_DEADLINE_MIN = 2;
 
 interface URLInputs {
   hashHex: string;
@@ -150,6 +149,7 @@ const parseUrlInputs = (params: URLSearchParams): URLInputs | { error: string } 
 export const BobSwap: React.FC = () => {
   const [searchParams] = useSearchParams();
   const { session, cardano, swapState } = useSwapContext();
+  const toast = useToast();
   const [state, dispatch] = useReducer(reducer, { kind: 'need-url' as const });
 
   useEffect(() => {
@@ -185,22 +185,23 @@ export const BobSwap: React.FC = () => {
         const nowSecs = Math.floor(Date.now() / 1000);
         const cardanoDeadlineSecs = Math.floor(Number(htlcInfo.deadlineMs) / 1000);
         const cardanoRemaining = cardanoDeadlineSecs - nowSecs;
-        if (cardanoRemaining < MIN_CARDANO_DEADLINE_WINDOW_SECS) {
+        if (cardanoRemaining < limits.bobMinCardanoWindowSecs) {
           dispatch({
             t: 'unsafe',
             htlcInfo,
-            reason: `Cardano deadline only ${Math.round(cardanoRemaining / 60)}min away — need ≥ ${MIN_CARDANO_DEADLINE_WINDOW_SECS / 60}min. Abort.`,
+            reason: `Cardano deadline only ${Math.round(cardanoRemaining / 60)}min away — need ≥ ${Math.round(limits.bobMinCardanoWindowSecs / 60)}min. Abort.`,
           });
           return;
         }
-        const maxBobDeadlineSecs = cardanoDeadlineSecs - SAFETY_BUFFER_SECS;
-        const desiredBobDeadlineSecs = nowSecs + BOB_DEADLINE_MIN * 60;
+        const maxBobDeadlineSecs = cardanoDeadlineSecs - limits.bobSafetyBufferSecs;
+        const desiredBobDeadlineSecs = nowSecs + limits.bobDeadlineMin * 60;
         const bobDeadlineSecs = Math.min(desiredBobDeadlineSecs, maxBobDeadlineSecs);
-        if (bobDeadlineSecs <= nowSecs + 120) {
+        const bobTtlSecs = bobDeadlineSecs - nowSecs;
+        if (bobTtlSecs < limits.bobMinDepositTtlSecs) {
           dispatch({
             t: 'unsafe',
             htlcInfo,
-            reason: `Cannot pick a safe Midnight deadline (buffer ${SAFETY_BUFFER_SECS}s leaves < 2min).`,
+            reason: `Cannot pick a safe Midnight deadline: ${Math.max(0, bobTtlSecs)}s remaining after ${limits.bobSafetyBufferSecs}s buffer, need ≥ ${limits.bobMinDepositTtlSecs}s.`,
           });
           return;
         }
@@ -252,10 +253,12 @@ export const BobSwap: React.FC = () => {
         dispatch({ t: 'to-waiting-preimage' });
       } catch (e) {
         console.error('[bob] deposit failed', e);
-        dispatch({ t: 'error', message: describeError(e) });
+        const msg = describeError(e);
+        toast.error(`Deposit failed: ${msg}`);
+        dispatch({ t: 'error', message: msg });
       }
     })();
-  }, [state, session, cardano, swapState.usdcColor]);
+  }, [state, session, cardano, swapState.usdcColor, toast]);
 
   // Effect: wait for preimage reveal. Race two sources:
   //   (a) Midnight indexer via watchForPreimageReveal (authoritative)
@@ -331,9 +334,11 @@ export const BobSwap: React.FC = () => {
       dispatch({ t: 'to-done', claimTxHash });
     } catch (e) {
       console.error('[bob] cardano claim failed', e);
-      dispatch({ t: 'error', message: describeError(e) });
+      const msg = describeError(e);
+      toast.error(`Claim failed: ${msg}`);
+      dispatch({ t: 'error', message: msg });
     }
-  }, [state, cardano]);
+  }, [state, cardano, toast]);
 
   const deadlineStr = useMemo(() => {
     if (
@@ -350,9 +355,7 @@ export const BobSwap: React.FC = () => {
 
   return (
     <Stack spacing={3} sx={{ width: '100%', maxWidth: 720 }}>
-      <Typography variant="h4" sx={{ color: '#fff' }}>
-        Bob — deposit USDC, claim ADA
-      </Typography>
+      <Typography variant="h4">Bob — deposit USDC, claim ADA</Typography>
 
       {state.kind === 'need-url' && <Alert severity="warning">Waiting for URL parameters…</Alert>}
 
@@ -394,14 +397,18 @@ export const BobSwap: React.FC = () => {
                 USDC: {state.url.usdcAmount.toString()} (native, color {swapState.usdcColor.slice(0, 16)}…)
               </Typography>
               <Typography>Midnight deadline: {new Date(Number(state.bobDeadlineSecs) * 1000).toISOString()}</Typography>
+              <Typography variant="caption" sx={{ opacity: 0.8 }}>
+                {describeBobWindow(Number(state.htlcInfo.deadlineMs), Number(state.bobDeadlineSecs))}
+              </Typography>
               {state.truncated && (
                 <Alert severity="info">
-                  Midnight deadline truncated to stay {SAFETY_BUFFER_SECS / 60}min inside Cardano deadline.
+                  Midnight deadline truncated to stay {Math.round(limits.bobSafetyBufferSecs / 60)}min inside Cardano
+                  deadline.
                 </Alert>
               )}
-              <Button variant="contained" onClick={onAccept}>
+              <AsyncButton variant="contained" onClick={onAccept} pendingLabel="Preparing deposit…">
                 Deposit USDC
-              </Button>
+              </AsyncButton>
             </Stack>
           </CardContent>
         </Card>
@@ -436,9 +443,9 @@ export const BobSwap: React.FC = () => {
           <CardContent>
             <Stack spacing={2}>
               <Alert severity="success">Preimage revealed: {state.preimageHex.slice(0, 32)}…</Alert>
-              <Button variant="contained" color="success" onClick={onClaim}>
+              <AsyncButton variant="contained" color="success" onClick={onClaim} pendingLabel="Signing in Eternl…">
                 Claim ADA on Cardano
-              </Button>
+              </AsyncButton>
             </Stack>
           </CardContent>
         </Card>

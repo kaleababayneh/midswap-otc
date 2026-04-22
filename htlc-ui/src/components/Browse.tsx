@@ -10,24 +10,13 @@
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
-import {
-  Alert,
-  Box,
-  Button,
-  Card,
-  CardContent,
-  Chip,
-  CircularProgress,
-  Stack,
-  Typography,
-} from '@mui/material';
+import { Alert, Box, Button, Card, CardContent, Chip, CircularProgress, Stack, Typography } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { useNavigate } from 'react-router-dom';
 import { orchestratorClient, type Swap } from '../api/orchestrator-client';
 import { useSwapContext } from '../hooks';
 import { WalletConnect } from './WalletConnect';
-
-const MIN_REMAINING_SECS = 1800;
+import { limits } from '../config/limits';
 
 const formatRemaining = (deadlineMs: number): string => {
   const remSecs = Math.floor((deadlineMs - Date.now()) / 1000);
@@ -88,7 +77,7 @@ export const Browse: React.FC = () => {
   return (
     <Stack spacing={3} sx={{ width: '100%', maxWidth: 720 }}>
       <Stack direction="row" spacing={2} alignItems="center">
-        <Typography variant="h4" sx={{ color: '#fff', flex: 1 }}>
+        <Typography variant="h4" sx={{ flex: 1 }}>
           Open offers
         </Typography>
         <Button variant="outlined" startIcon={<RefreshIcon />} onClick={() => void refresh()} disabled={loading}>
@@ -140,7 +129,7 @@ export const Browse: React.FC = () => {
       {visibleSwaps?.map((swap) => {
         const remaining = swap.cardanoDeadlineMs - Date.now();
         const expired = remaining <= 0;
-        const unsafe = remaining < MIN_REMAINING_SECS * 1000;
+        const unsafe = remaining < limits.browseMinRemainingSecs * 1000;
         const targetPkh = swap.bobPkh?.toLowerCase();
         const missingPkh = !targetPkh;
         const walletMismatch = !!(myPkh && targetPkh && myPkh !== targetPkh);
@@ -191,11 +180,7 @@ export const Browse: React.FC = () => {
                   </Alert>
                 )}
                 <Box sx={{ mt: 1 }}>
-                  <Button
-                    variant="contained"
-                    onClick={() => onTakeOffer(swap)}
-                    disabled={!canTake}
-                  >
+                  <Button variant="contained" onClick={() => onTakeOffer(swap)} disabled={!canTake}>
                     {!myPkh
                       ? 'Connect Eternl to take'
                       : missingPkh

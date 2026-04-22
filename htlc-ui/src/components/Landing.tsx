@@ -33,24 +33,29 @@ export const Landing: React.FC = () => {
 
   return (
     <Stack spacing={3} alignItems="center" sx={{ width: '100%' }}>
-      <Typography variant="h3" sx={{ color: '#fff', textAlign: 'center' }}>
+      <Typography variant="h3" sx={{ textAlign: 'center' }}>
         Midnight ⇄ Cardano Atomic Swap
       </Typography>
-      <Typography variant="body1" sx={{ color: '#ccc', maxWidth: 720, textAlign: 'center' }}>
-        Swap ADA on Cardano for native USDC on Midnight, trustless and hash-time-locked. Pick your role below.
+      <Typography variant="body1" color="text.secondary" sx={{ maxWidth: 720, textAlign: 'center' }}>
+        Swap ADA on Cardano for native USDC on Midnight — trustless, hash-time-locked, no custodian. Connect both
+        wallets and pick your role, or read{' '}
+        <Button component="span" variant="text" size="small" onClick={() => navigate('/how-to')}>
+          how it works
+        </Button>{' '}
+        first.
       </Typography>
 
       <WalletConnect />
 
-      <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
+      <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap justifyContent="center">
         <Button variant="contained" size="large" disabled={!session} onClick={() => navigate('/alice')}>
           I am Alice (have ADA, want USDC)
         </Button>
         <Button variant="contained" size="large" color="secondary" onClick={() => navigate('/browse')}>
           Browse open offers
         </Button>
-        <Button variant="outlined" size="large" disabled={!session} onClick={() => navigate('/bob')}>
-          Bob (via share URL)
+        <Button variant="outlined" size="large" disabled={!session} onClick={() => navigate('/mint-usdc')}>
+          Mint USDC
         </Button>
         <Button variant="outlined" size="large" disabled={!session} onClick={() => navigate('/reclaim')}>
           Reclaim

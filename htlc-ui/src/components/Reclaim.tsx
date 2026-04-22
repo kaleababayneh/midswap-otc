@@ -34,6 +34,7 @@ import { useSwapContext } from '../hooks';
 import { WalletConnect } from './WalletConnect';
 import { hexToBytes } from '../api/key-encoding';
 import { orchestratorClient, type Swap } from '../api/orchestrator-client';
+import { SwapStatusChip } from './SwapStatusChip';
 
 type RowStatus =
   | { kind: 'idle' }
@@ -280,12 +281,7 @@ export const Reclaim: React.FC = () => {
       return <Alert severity="error">{rs.message}</Alert>;
     }
     return (
-      <Button
-        variant="contained"
-        color="warning"
-        onClick={() => void reclaimAdaRow(swap)}
-        disabled={!cardano}
-      >
+      <Button variant="contained" color="warning" onClick={() => void reclaimAdaRow(swap)} disabled={!cardano}>
         Reclaim ADA
       </Button>
     );
@@ -308,12 +304,7 @@ export const Reclaim: React.FC = () => {
       return <Alert severity="error">{rs.message}</Alert>;
     }
     return (
-      <Button
-        variant="contained"
-        color="warning"
-        onClick={() => void reclaimUsdcRow(swap)}
-        disabled={!session}
-      >
+      <Button variant="contained" color="warning" onClick={() => void reclaimUsdcRow(swap)} disabled={!session}>
         Reclaim USDC
       </Button>
     );
@@ -322,7 +313,7 @@ export const Reclaim: React.FC = () => {
   return (
     <Stack spacing={3} sx={{ width: '100%', maxWidth: 780 }}>
       <Stack direction="row" spacing={2} alignItems="center">
-        <Typography variant="h4" sx={{ color: '#fff', flex: 1 }}>
+        <Typography variant="h4" sx={{ flex: 1 }}>
           Reclaim stuck funds
         </Typography>
         <Button variant="outlined" startIcon={<RefreshIcon />} onClick={() => void refresh()} disabled={loading}>
@@ -382,7 +373,7 @@ export const Reclaim: React.FC = () => {
                         {swap.adaAmount} ADA ⇄ {swap.usdcAmount} USDC
                       </Typography>
                       <Chip size="small" color="error" label={`expired ${formatAgo(swap.cardanoDeadlineMs)}`} />
-                      <Chip size="small" variant="outlined" label={swap.status} />
+                      <SwapStatusChip status={swap.status} />
                     </Stack>
                     <Typography variant="caption" sx={{ wordBreak: 'break-all' }}>
                       Hash: {swap.hash.slice(0, 32)}…
@@ -429,12 +420,8 @@ export const Reclaim: React.FC = () => {
                       <Typography variant="subtitle1">
                         {swap.usdcAmount} USDC ⇄ {swap.adaAmount} ADA
                       </Typography>
-                      <Chip
-                        size="small"
-                        color="error"
-                        label={`expired ${formatAgo(swap.midnightDeadlineMs ?? 0)}`}
-                      />
-                      <Chip size="small" variant="outlined" label={swap.status} />
+                      <Chip size="small" color="error" label={`expired ${formatAgo(swap.midnightDeadlineMs ?? 0)}`} />
+                      <SwapStatusChip status={swap.status} />
                     </Stack>
                     <Typography variant="caption" sx={{ wordBreak: 'break-all' }}>
                       Hash: {swap.hash.slice(0, 32)}…
@@ -509,8 +496,8 @@ export const Reclaim: React.FC = () => {
                       <Alert severity="success">Deadline has passed — eligible for reclaim.</Alert>
                     ) : (
                       <Alert severity="warning">
-                        Deadline has not yet passed ({Math.ceil((Number(adaStatus.deadlineMs) - Date.now()) / 60000)} min
-                        remaining).
+                        Deadline has not yet passed ({Math.ceil((Number(adaStatus.deadlineMs) - Date.now()) / 60000)}{' '}
+                        min remaining).
                       </Alert>
                     )}
                     <Button

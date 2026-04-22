@@ -14,18 +14,20 @@ import {
   CardContent,
   CircularProgress,
   Divider,
-  IconButton,
   Link,
   Stack,
   TextField,
   Typography,
 } from '@mui/material';
-import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import { getAddressDetails } from '@lucid-evolution/lucid';
 import { useSwapContext } from '../hooks';
 import { WalletConnect } from './WalletConnect';
 import { bytesToHex, hexToBytes } from '../api/key-encoding';
 import { orchestratorClient, tryOrchestrator } from '../api/orchestrator-client';
+import { AsyncButton } from './AsyncButton';
+import { ShareUrlCard } from './ShareUrlCard';
+import { limits } from '../config/limits';
+import { useToast } from '../hooks/useToast';
 
 const resolveBobPkh = (input: string): string | undefined => {
   const trimmed = input.trim();
@@ -207,6 +209,7 @@ const describeError = (e: unknown): string => {
 
 export const AliceSwap: React.FC = () => {
   const { session, cardano, swapState } = useSwapContext();
+  const toast = useToast();
   const [state, dispatch] = useReducer(reducer, { kind: 'connect' as const });
   const restoreAttemptedRef = useRef(false);
   const [restoreNotice, setRestoreNotice] = useState<string | undefined>(undefined);
@@ -214,7 +217,7 @@ export const AliceSwap: React.FC = () => {
   // Form inputs.
   const [adaAmount, setAdaAmount] = useState<string>('1');
   const [usdcAmount, setUsdcAmount] = useState<string>('1');
-  const [deadlineMin, setDeadlineMin] = useState<string>('120');
+  const [deadlineMin, setDeadlineMin] = useState<string>(limits.aliceDefaultDeadlineMin.toString());
   const [bobPkh, setBobPkh] = useState<string>('');
   const [formError, setFormError] = useState<string | undefined>(undefined);
   const resolvedBobPkh = useMemo(() => resolveBobPkh(bobPkh), [bobPkh]);
@@ -291,8 +294,10 @@ export const AliceSwap: React.FC = () => {
     const ada = BigInt(adaAmount);
     const usdc = BigInt(usdcAmount);
     const min = parseInt(deadlineMin, 10);
-    if (!Number.isFinite(min) || min < 3) {
-      setFormError('Deadline must be ≥ 60 minutes (Bob needs ≥ 30min + dust-sync time).');
+    if (!Number.isFinite(min) || min < limits.aliceMinDeadlineMin) {
+      setFormError(
+        `Deadline must be ≥ ${limits.aliceMinDeadlineMin} minutes (Bob needs ≥ ${Math.round(limits.bobMinCardanoWindowSecs / 60)}min + dust-sync time).`,
+      );
       return;
     }
     if (ada <= 0n || usdc <= 0n) {
@@ -354,9 +359,11 @@ export const AliceSwap: React.FC = () => {
       });
     } catch (e) {
       console.error('[AliceSwap:lock]', e);
-      dispatch({ t: 'error', message: describeError(e) });
+      const msg = describeError(e);
+      toast.error(`Lock failed: ${msg}`);
+      dispatch({ t: 'error', message: msg });
     }
-  }, [session, cardano, adaAmount, usdcAmount, deadlineMin, resolvedBobPkh]);
+  }, [session, cardano, adaAmount, usdcAmount, deadlineMin, resolvedBobPkh, toast]);
 
   const startWaiting = useCallback(() => {
     dispatch({ t: 'to-waiting' });
@@ -440,9 +447,11 @@ export const AliceSwap: React.FC = () => {
       dispatch({ t: 'to-done', depositAmount: state.depositAmount });
     } catch (e) {
       console.error('[AliceSwap:claim]', e);
-      dispatch({ t: 'error', message: describeError(e) });
+      const msg = describeError(e);
+      toast.error(`Claim failed: ${msg}`);
+      dispatch({ t: 'error', message: msg });
     }
-  }, [state, session]);
+  }, [state, session, toast]);
 
   const onForgetPending = useCallback(() => {
     if (!session) return;
@@ -451,16 +460,9 @@ export const AliceSwap: React.FC = () => {
     dispatch({ t: 'to-params' });
   }, [session]);
 
-  const onCopy = useCallback(async () => {
-    if (!shareUrl) return;
-    await navigator.clipboard.writeText(shareUrl);
-  }, [shareUrl]);
-
   return (
     <Stack spacing={3} sx={{ width: '100%', maxWidth: 720 }}>
-      <Typography variant="h4" sx={{ color: '#fff' }}>
-        Alice — lock ADA, claim USDC
-      </Typography>
+      <Typography variant="h4">Alice — lock ADA, claim USDC</Typography>
 
       {restoreNotice && (
         <Alert severity="info">
@@ -498,11 +500,12 @@ export const AliceSwap: React.FC = () => {
                 size="small"
               />
               <TextField
-                label="Cardano deadline (minutes, ≥ 60)"
+                label={`Cardano deadline (minutes, ≥ ${limits.aliceMinDeadlineMin})`}
                 value={deadlineMin}
                 onChange={(e) => setDeadlineMin(e.target.value)}
                 type="number"
                 size="small"
+                helperText={`Default: ${limits.aliceDefaultDeadlineMin}min. Bob's Midnight deadline is nested inside this with a ${limits.bobSafetyBufferSecs}s safety buffer.`}
               />
               <TextField
                 label="Bob's Cardano address or PKH"
@@ -519,9 +522,14 @@ export const AliceSwap: React.FC = () => {
                 }
               />
               {formError && <Alert severity="error">{formError}</Alert>}
-              <Button variant="contained" onClick={onLock} disabled={!resolvedBobPkh}>
+              <AsyncButton
+                variant="contained"
+                onClick={onLock}
+                disabled={!resolvedBobPkh}
+                pendingLabel="Signing in Eternl…"
+              >
                 Lock ADA
-              </Button>
+              </AsyncButton>
             </Stack>
           </CardContent>
         </Card>
@@ -555,13 +563,7 @@ export const AliceSwap: React.FC = () => {
               <Typography variant="body2">Deadline: {new Date(Number(state.deadlineMs)).toISOString()}</Typography>
 
               <Divider />
-              <Typography variant="h6">3. Send this URL to Bob</Typography>
-              <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-                <TextField fullWidth value={shareUrl ?? ''} size="small" InputProps={{ readOnly: true }} />
-                <IconButton onClick={onCopy}>
-                  <ContentCopyIcon />
-                </IconButton>
-              </Box>
+              {shareUrl && <ShareUrlCard shareUrl={shareUrl} title="3. Send this URL to Bob" />}
 
               {state.kind === 'locked' && (
                 <Button variant="contained" onClick={startWaiting}>
@@ -580,9 +582,9 @@ export const AliceSwap: React.FC = () => {
                     Bob deposited {state.depositAmount.toString()} USDC (color {state.depositColorHex.slice(0, 16)}…
                     {state.depositColorHex !== swapState.usdcColor && ' — MISMATCH vs expected USDC color!'})
                   </Alert>
-                  <Button variant="contained" color="success" onClick={onClaim}>
+                  <AsyncButton variant="contained" color="success" onClick={onClaim} pendingLabel="Signing in 1AM…">
                     Claim USDC
-                  </Button>
+                  </AsyncButton>
                 </>
               )}
               {state.kind === 'claiming' && (

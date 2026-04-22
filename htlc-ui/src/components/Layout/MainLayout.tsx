@@ -14,40 +14,26 @@
 // limitations under the License.
 
 import React from 'react';
-import { Box } from '@mui/material';
+import { Box, Container } from '@mui/material';
 import { Header } from './Header';
+import { RecoveryBanner } from '../RecoveryBanner';
 
-/**
- * Provides layout for the bulletin board application.
- */
 export const MainLayout: React.FC<React.PropsWithChildren> = ({ children }) => {
   return (
-    <Box sx={{ minHeight: '100vh', overflow: 'hidden' }}>
+    <Box sx={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', bgcolor: 'background.default' }}>
       <Header />
-      <Box sx={{ px: 10, position: 'relative', height: '100%' }}>
-        <img
-          src="/logo-render.png"
-          alt="logo-image"
-          height={607}
-          style={{ position: 'absolute', zIndex: 1, left: '2vw', top: '5vh' }}
-        />
+      <Container maxWidth="lg" sx={{ py: 4, flexGrow: 1 }}>
+        <RecoveryBanner />
         <Box
           sx={{
-            zIndex: 999,
-            position: 'relative',
             display: 'flex',
-            justifyContent: 'center',
-            gap: '5px',
-            rowGap: '5px',
-            alignItems: 'center',
-            height: '100%',
-            py: '10vh',
-            px: '15vw',
+            flexDirection: 'column',
+            gap: 3,
           }}
         >
           {children}
         </Box>
-      </Box>
+      </Container>
     </Box>
   );
 };
