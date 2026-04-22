@@ -19,6 +19,26 @@ import { watchForPreimageReveal } from '../api/midnight-watcher';
 import { bytesToHex, hexToBytes, userEither } from '../api/key-encoding';
 import { orchestratorClient, tryOrchestrator } from '../api/orchestrator-client';
 
+const describeError = (e: unknown): string => {
+  if (e instanceof Error) {
+    const msg = e.message?.trim();
+    const cause = (e as Error & { cause?: unknown }).cause;
+    const causeStr = cause ? ` (cause: ${typeof cause === 'string' ? cause : JSON.stringify(cause)})` : '';
+    if (msg && msg !== 'Unknown error:') return `${msg}${causeStr}`;
+    try {
+      const own = JSON.stringify(e, Object.getOwnPropertyNames(e));
+      return `${msg || 'unknown'} — ${own}${causeStr}`;
+    } catch {
+      return `${msg || 'unknown error'}${causeStr}`;
+    }
+  }
+  try {
+    return JSON.stringify(e);
+  } catch {
+    return String(e);
+  }
+};
+
 const SAFETY_BUFFER_SECS = 600; // 10 min
 const MIN_CARDANO_DEADLINE_WINDOW_SECS = 1800; // 30 min
 const BOB_DEADLINE_MIN = 60;
@@ -192,7 +212,8 @@ export const BobSwap: React.FC = () => {
         });
       } catch (e) {
         if (controller.signal.aborted) return;
-        dispatch({ t: 'error', message: e instanceof Error ? e.message : String(e) });
+        console.error('[bob] cardano watch failed', e);
+        dispatch({ t: 'error', message: describeError(e) });
       }
     })();
     return () => controller.abort();
@@ -230,7 +251,8 @@ export const BobSwap: React.FC = () => {
         );
         dispatch({ t: 'to-waiting-preimage' });
       } catch (e) {
-        dispatch({ t: 'error', message: e instanceof Error ? e.message : String(e) });
+        console.error('[bob] deposit failed', e);
+        dispatch({ t: 'error', message: describeError(e) });
       }
     })();
   }, [state, session, cardano, swapState.usdcColor]);
@@ -252,7 +274,8 @@ export const BobSwap: React.FC = () => {
         dispatch({ t: 'preimage-seen', preimageHex: bytesToHex(preimage) });
       } catch (e) {
         if (controller.signal.aborted) return;
-        dispatch({ t: 'error', message: e instanceof Error ? e.message : String(e) });
+        console.error('[bob] preimage watch failed', e);
+        dispatch({ t: 'error', message: describeError(e) });
       }
     })();
     return () => controller.abort();
@@ -277,7 +300,8 @@ export const BobSwap: React.FC = () => {
       );
       dispatch({ t: 'to-done', claimTxHash });
     } catch (e) {
-      dispatch({ t: 'error', message: e instanceof Error ? e.message : String(e) });
+      console.error('[bob] cardano claim failed', e);
+      dispatch({ t: 'error', message: describeError(e) });
     }
   }, [state, cardano]);
 
