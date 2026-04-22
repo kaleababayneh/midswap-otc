@@ -22,6 +22,11 @@ CREATE TABLE IF NOT EXISTS swaps (
   cardano_reclaim_tx    TEXT,
   midnight_reclaim_tx   TEXT,
 
+  -- Preimage Alice reveals on Midnight claim. Safe to publish because it is
+  -- already public in `revealedPreimages` at the same moment Alice patches
+  -- `status='alice_claimed'`. Lets Bob skip the Midnight indexer catch-up wait.
+  midnight_preimage     TEXT,
+
   status                TEXT NOT NULL CHECK (status IN (
                           'open',
                           'bob_deposited',

@@ -257,10 +257,24 @@ export const BobSwap: React.FC = () => {
     })();
   }, [state, session, cardano, swapState.usdcColor]);
 
-  // Effect: wait for preimage reveal on Midnight.
+  // Effect: wait for preimage reveal. Race two sources:
+  //   (a) Midnight indexer via watchForPreimageReveal (authoritative)
+  //   (b) Orchestrator DB — Alice patches `midnightPreimage` the moment her
+  //       withdraw tx finalizes, beating the indexer catch-up.
+  // Whichever surfaces the preimage first wins. The preimage is self-validating
+  // (Bob's Cardano claim sha256-checks it), so trusting the DB is safe.
   useEffect(() => {
     if (state.kind !== 'waiting-preimage' || !session) return;
     const controller = new AbortController();
+    let fired = false;
+    const finishWith = (preimageHex: string): void => {
+      if (fired) return;
+      fired = true;
+      controller.abort();
+      dispatch({ t: 'preimage-seen', preimageHex });
+    };
+
+    // Source (a): on-chain indexer.
     (async () => {
       try {
         const hashBytes = hexToBytes(state.url.hashHex);
@@ -271,14 +285,30 @@ export const BobSwap: React.FC = () => {
           5_000,
           controller.signal,
         );
-        dispatch({ t: 'preimage-seen', preimageHex: bytesToHex(preimage) });
+        finishWith(bytesToHex(preimage));
       } catch (e) {
         if (controller.signal.aborted) return;
         console.error('[bob] preimage watch failed', e);
         dispatch({ t: 'error', message: describeError(e) });
       }
     })();
-    return () => controller.abort();
+
+    // Source (b): orchestrator DB.
+    const tick = async (): Promise<void> => {
+      if (fired) return;
+      const dbSwap = await orchestratorClient.getSwap(state.url.hashHex).catch(() => undefined);
+      if (!dbSwap) return;
+      if (dbSwap.midnightPreimage && /^[0-9a-f]{64}$/.test(dbSwap.midnightPreimage)) {
+        finishWith(dbSwap.midnightPreimage);
+      }
+    };
+    void tick();
+    const id = setInterval(() => void tick(), 2000);
+
+    return () => {
+      controller.abort();
+      clearInterval(id);
+    };
   }, [state, session]);
 
   const onAccept = useCallback(() => {

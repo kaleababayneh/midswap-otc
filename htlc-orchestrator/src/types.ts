@@ -28,6 +28,8 @@ export interface Swap {
   cardanoReclaimTx: string | null;
   midnightReclaimTx: string | null;
 
+  midnightPreimage: string | null;
+
   status: SwapStatus;
   createdAt: number;
   updatedAt: number;
@@ -55,5 +57,6 @@ export interface PatchSwapBody {
   cardanoClaimTx?: string;
   cardanoReclaimTx?: string;
   midnightReclaimTx?: string;
+  midnightPreimage?: string;
   status?: SwapStatus;
 }

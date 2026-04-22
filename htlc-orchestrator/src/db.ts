@@ -23,6 +23,7 @@ interface SwapRow {
   cardano_claim_tx: string | null;
   cardano_reclaim_tx: string | null;
   midnight_reclaim_tx: string | null;
+  midnight_preimage: string | null;
   status: SwapStatus;
   created_at: number;
   updated_at: number;
@@ -45,6 +46,7 @@ const rowToSwap = (row: SwapRow): Swap => ({
   cardanoClaimTx: row.cardano_claim_tx,
   cardanoReclaimTx: row.cardano_reclaim_tx,
   midnightReclaimTx: row.midnight_reclaim_tx,
+  midnightPreimage: row.midnight_preimage,
   status: row.status,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
@@ -65,6 +67,11 @@ export const openSwapStore = (dbPath: string): SwapStore => {
 
   const schema = readFileSync(resolve(__dirname, 'schema.sql'), 'utf8');
   db.exec(schema);
+
+  const existingCols = db.prepare('PRAGMA table_info(swaps)').all() as Array<{ name: string }>;
+  if (!existingCols.some((c) => c.name === 'midnight_preimage')) {
+    db.exec('ALTER TABLE swaps ADD COLUMN midnight_preimage TEXT');
+  }
 
   const insertStmt = db.prepare(`
     INSERT INTO swaps (
@@ -94,6 +101,7 @@ export const openSwapStore = (dbPath: string): SwapStore => {
     cardanoClaimTx: 'cardano_claim_tx',
     cardanoReclaimTx: 'cardano_reclaim_tx',
     midnightReclaimTx: 'midnight_reclaim_tx',
+    midnightPreimage: 'midnight_preimage',
     status: 'status',
   };
 

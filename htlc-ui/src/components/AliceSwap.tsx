@@ -389,14 +389,53 @@ export const AliceSwap: React.FC = () => {
     return () => sub.unsubscribe();
   }, [state, session]);
 
+  // Fast-path: poll orchestrator while waiting-deposit. Bob patches
+  // `status: 'bob_deposited'` the moment his Midnight deposit tx finalizes —
+  // beating the indexer catch-up that feeds htlcApi.state$. If the DB signals
+  // first, advance to claim-ready using the pre-known amount/color; the
+  // withdraw circuit will itself re-verify on-chain.
+  useEffect(() => {
+    if (state.kind !== 'waiting-deposit') return;
+    let cancelled = false;
+    const tick = async (): Promise<void> => {
+      const dbSwap = await orchestratorClient.getSwap(state.hashHex).catch(() => undefined);
+      if (cancelled) return;
+      if (
+        dbSwap &&
+        (dbSwap.status === 'bob_deposited' ||
+          dbSwap.status === 'alice_claimed' ||
+          dbSwap.status === 'completed')
+      ) {
+        dispatch({
+          t: 'deposit-seen',
+          depositAmount: state.usdcAmount,
+          depositColorHex: swapState.usdcColor,
+        });
+      }
+    };
+    void tick();
+    const id = setInterval(() => void tick(), 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [state, swapState.usdcColor]);
+
   const onClaim = useCallback(async () => {
     if (state.kind !== 'claim-ready' || !session) return;
     dispatch({ t: 'to-claiming' });
     try {
       const preimage = hexToBytes(state.preimageHex);
       await session.htlcApi.withdrawWithPreimage(preimage);
+      // Publish the preimage alongside the status. Safe — it's already public
+      // in revealedPreimages at this point. Lets Bob skip the Midnight indexer
+      // wait on his side.
       void tryOrchestrator(
-        () => orchestratorClient.patchSwap(state.hashHex, { status: 'alice_claimed' }),
+        () =>
+          orchestratorClient.patchSwap(state.hashHex, {
+            status: 'alice_claimed',
+            midnightPreimage: state.preimageHex,
+          }),
         'patchSwap alice_claimed',
       );
       clearPending(session.bootstrap.coinPublicKeyHex);

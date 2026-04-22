@@ -75,6 +75,10 @@ const validatePatchBody = (body: unknown): PatchSwapBody | string => {
       out[field] = b[field] as string;
     }
   }
+  if (b.midnightPreimage !== undefined) {
+    if (!isHash(b.midnightPreimage)) return 'midnightPreimage must be 64 lowercase hex chars';
+    out.midnightPreimage = b.midnightPreimage;
+  }
   if (b.status !== undefined) {
     if (typeof b.status !== 'string' || !STATUS_VALUES.includes(b.status as SwapStatus)) {
       return `status must be one of: ${STATUS_VALUES.join(', ')}`;
