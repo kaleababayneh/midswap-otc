@@ -15,7 +15,8 @@
       "api",
       "contract",
       "htlc-ft-cli",
-      "htlc-ui"
+      "htlc-ui",
+      "htlc-orchestrator"
     ]
   },
   "dependencies": {

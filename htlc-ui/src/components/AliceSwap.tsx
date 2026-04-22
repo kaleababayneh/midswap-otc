@@ -24,6 +24,7 @@ import { getAddressDetails } from '@lucid-evolution/lucid';
 import { useSwapContext } from '../hooks';
 import { WalletConnect } from './WalletConnect';
 import { bytesToHex, hexToBytes } from '../api/key-encoding';
+import { orchestratorClient, tryOrchestrator } from '../api/orchestrator-client';
 
 const resolveBobPkh = (input: string): string | undefined => {
   const trimmed = input.trim();
@@ -144,6 +145,26 @@ const sha256 = async (bytes: Uint8Array): Promise<Uint8Array> => {
 
 const randomBytes32 = (): Uint8Array => crypto.getRandomValues(new Uint8Array(32));
 
+const describeError = (e: unknown): string => {
+  if (e instanceof Error) {
+    const msg = e.message?.trim();
+    const cause = (e as Error & { cause?: unknown }).cause;
+    const causeStr = cause ? ` (cause: ${typeof cause === 'string' ? cause : JSON.stringify(cause)})` : '';
+    if (msg && msg !== 'Unknown error:') return `${msg}${causeStr}`;
+    try {
+      const own = JSON.stringify(e, Object.getOwnPropertyNames(e));
+      return `${msg || 'unknown'} — ${own}${causeStr}`;
+    } catch {
+      return `${msg || 'unknown error'}${causeStr}`;
+    }
+  }
+  try {
+    return JSON.stringify(e);
+  } catch {
+    return String(e);
+  }
+};
+
 export const AliceSwap: React.FC = () => {
   const { session, cardano, swapState } = useSwapContext();
   const [state, dispatch] = useReducer(reducer, { kind: 'connect' as const });
@@ -216,6 +237,22 @@ export const AliceSwap: React.FC = () => {
       const lovelace = ada * 1_000_000n;
 
       const lockTxHash = await cardano.cardanoHtlc.lock(lovelace, hashHex, bobPkhHex, deadlineMs);
+
+      void tryOrchestrator(
+        () =>
+          orchestratorClient.createSwap({
+            hash: hashHex,
+            aliceCpk: session.bootstrap.coinPublicKeyHex,
+            aliceUnshielded: session.bootstrap.unshieldedAddressHex,
+            adaAmount: ada.toString(),
+            usdcAmount: usdc.toString(),
+            cardanoDeadlineMs: Number(deadlineMs),
+            cardanoLockTx: lockTxHash,
+            bobPkh: bobPkhHex,
+          }),
+        'createSwap',
+      );
+
       dispatch({
         t: 'locked',
         payload: {
@@ -229,7 +266,8 @@ export const AliceSwap: React.FC = () => {
         },
       });
     } catch (e) {
-      dispatch({ t: 'error', message: e instanceof Error ? e.message : String(e) });
+      console.error('[AliceSwap:lock]', e);
+      dispatch({ t: 'error', message: describeError(e) });
     }
   }, [session, cardano, adaAmount, usdcAmount, deadlineMin, resolvedBobPkh]);
 
@@ -244,6 +282,15 @@ export const AliceSwap: React.FC = () => {
       next: (derived) => {
         const entry = derived.entries.get(state.hashHex);
         if (entry && entry.amount > 0n) {
+          void tryOrchestrator(
+            () =>
+              orchestratorClient.patchSwap(state.hashHex, {
+                status: 'bob_deposited',
+                bobCpk: bytesToHex(entry.senderAuth),
+                midnightDeadlineMs: Number(entry.expirySecs) * 1000,
+              }),
+            'patchSwap bob_deposited',
+          );
           dispatch({
             t: 'deposit-seen',
             depositAmount: entry.amount,
@@ -261,9 +308,14 @@ export const AliceSwap: React.FC = () => {
     try {
       const preimage = hexToBytes(state.preimageHex);
       await session.htlcApi.withdrawWithPreimage(preimage);
+      void tryOrchestrator(
+        () => orchestratorClient.patchSwap(state.hashHex, { status: 'alice_claimed' }),
+        'patchSwap alice_claimed',
+      );
       dispatch({ t: 'to-done', depositAmount: state.depositAmount });
     } catch (e) {
-      dispatch({ t: 'error', message: e instanceof Error ? e.message : String(e) });
+      console.error('[AliceSwap:claim]', e);
+      dispatch({ t: 'error', message: describeError(e) });
     }
   }, [state, session]);
 

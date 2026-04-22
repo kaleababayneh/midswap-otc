@@ -50,6 +50,12 @@ address.json
 swap-state.json
 pending-swap.json
 
+# Orchestrator SQLite database
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
 # MacOS
 .DS_Store
 

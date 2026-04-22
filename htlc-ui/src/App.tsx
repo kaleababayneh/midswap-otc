@@ -5,6 +5,7 @@ import { MainLayout } from './components';
 import { Landing } from './components/Landing';
 import { AliceSwap } from './components/AliceSwap';
 import { BobSwap } from './components/BobSwap';
+import { Browse } from './components/Browse';
 import { Reclaim } from './components/Reclaim';
 
 const App: React.FC = () => (
@@ -15,6 +16,7 @@ const App: React.FC = () => (
           <Route path="/" element={<Landing />} />
           <Route path="/alice" element={<AliceSwap />} />
           <Route path="/bob" element={<BobSwap />} />
+          <Route path="/browse" element={<Browse />} />
           <Route path="/reclaim" element={<Reclaim />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

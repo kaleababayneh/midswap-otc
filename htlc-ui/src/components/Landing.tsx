@@ -42,12 +42,15 @@ export const Landing: React.FC = () => {
 
       <WalletConnect />
 
-      <Stack direction="row" spacing={2}>
+      <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
         <Button variant="contained" size="large" disabled={!session} onClick={() => navigate('/alice')}>
           I am Alice (have ADA, want USDC)
         </Button>
-        <Button variant="contained" size="large" color="secondary" disabled={!session} onClick={() => navigate('/bob')}>
-          I am Bob (have USDC, want ADA)
+        <Button variant="contained" size="large" color="secondary" onClick={() => navigate('/browse')}>
+          Browse open offers
+        </Button>
+        <Button variant="outlined" size="large" disabled={!session} onClick={() => navigate('/bob')}>
+          Bob (via share URL)
         </Button>
         <Button variant="outlined" size="large" disabled={!session} onClick={() => navigate('/reclaim')}>
           Reclaim

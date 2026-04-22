@@ -17,6 +17,7 @@ import { WalletConnect } from './WalletConnect';
 import { watchForCardanoLock, type CardanoHTLCInfo } from '../api/cardano-watcher';
 import { watchForPreimageReveal } from '../api/midnight-watcher';
 import { bytesToHex, hexToBytes, userEither } from '../api/key-encoding';
+import { orchestratorClient, tryOrchestrator } from '../api/orchestrator-client';
 
 const SAFETY_BUFFER_SECS = 600; // 10 min
 const MIN_CARDANO_DEADLINE_WINDOW_SECS = 1800; // 30 min
@@ -216,12 +217,23 @@ export const BobSwap: React.FC = () => {
           receiverPayout: userEither(aliceUnshieldedBytes),
           senderPayout: userEither(bobUnshieldedBytes),
         });
+        void tryOrchestrator(
+          () =>
+            orchestratorClient.patchSwap(state.url.hashHex, {
+              status: 'bob_deposited',
+              bobCpk: session.bootstrap.coinPublicKeyHex,
+              bobUnshielded: session.bootstrap.unshieldedAddressHex,
+              bobPkh: cardano?.paymentKeyHash,
+              midnightDeadlineMs: Number(state.bobDeadlineSecs) * 1000,
+            }),
+          'patchSwap bob_deposited',
+        );
         dispatch({ t: 'to-waiting-preimage' });
       } catch (e) {
         dispatch({ t: 'error', message: e instanceof Error ? e.message : String(e) });
       }
     })();
-  }, [state, session, swapState.usdcColor]);
+  }, [state, session, cardano, swapState.usdcColor]);
 
   // Effect: wait for preimage reveal on Midnight.
   useEffect(() => {
@@ -255,6 +267,14 @@ export const BobSwap: React.FC = () => {
     dispatch({ t: 'to-claiming' });
     try {
       const claimTxHash = await cardano.cardanoHtlc.claim(state.preimageHex);
+      void tryOrchestrator(
+        () =>
+          orchestratorClient.patchSwap(state.url.hashHex, {
+            status: 'completed',
+            cardanoClaimTx: claimTxHash,
+          }),
+        'patchSwap completed',
+      );
       dispatch({ t: 'to-done', claimTxHash });
     } catch (e) {
       dispatch({ t: 'error', message: e instanceof Error ? e.message : String(e) });
