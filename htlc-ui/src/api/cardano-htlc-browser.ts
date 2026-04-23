@@ -245,7 +245,18 @@ export class CardanoHTLCBrowser {
 
   async claim(preimageHex: string): Promise<string> {
     const hashHex = await sha256Hex(preimageHex);
-    const utxo = await this.findHTLCUtxo(hashHex);
+    // Blockfrost's UTxO index lags tx submit by 20-30s. Retry finding the
+    // lock before giving up so we survive the taker's just-submitted-lock
+    // indexing race. ~40s total budget (8 × 5s).
+    let utxo = await this.findHTLCUtxo(hashHex);
+    for (let attempt = 0; !utxo && attempt < 8; attempt++) {
+      this.logger.info(
+        { hashHex, attempt: attempt + 1 },
+        'CardanoHTLC: claim waiting for Blockfrost to index the lock UTxO',
+      );
+      await new Promise((resolve) => setTimeout(resolve, 5_000));
+      utxo = await this.findHTLCUtxo(hashHex);
+    }
     if (!utxo) throw new Error(`No HTLC UTxO found for hash ${hashHex}`);
 
     const datum = decodeDatum(utxo.datum!);
@@ -293,7 +304,15 @@ export class CardanoHTLCBrowser {
   }
 
   async reclaim(preimageHash: string): Promise<string> {
-    const utxo = await this.findHTLCUtxo(preimageHash);
+    let utxo = await this.findHTLCUtxo(preimageHash);
+    for (let attempt = 0; !utxo && attempt < 4; attempt++) {
+      this.logger.info(
+        { hashHex: preimageHash, attempt: attempt + 1 },
+        'CardanoHTLC: reclaim waiting for Blockfrost to index the lock UTxO',
+      );
+      await new Promise((resolve) => setTimeout(resolve, 5_000));
+      utxo = await this.findHTLCUtxo(preimageHash);
+    }
     if (!utxo) throw new Error(`No HTLC UTxO found for hash ${preimageHash}`);
 
     const datum = decodeDatum(utxo.datum!);

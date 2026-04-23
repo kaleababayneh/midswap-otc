@@ -261,13 +261,21 @@ export const useReverseMakerFlow = (): UseReverseMakerFlow => {
         dbSwap.cardanoLockTx &&
         dbSwap.cardanoDeadlineMs !== null
       ) {
-        // Fabricate a CardanoHTLCInfo from the orchestrator fields. The maker
-        // already has everything they need to claim (hash + deadline + bound PKH).
+        // The orchestrator knows the taker locked, but Blockfrost's UTxO
+        // index may still lag the submit by 20-30s. If we transition to
+        // claim-ready before Blockfrost can see the UTxO, `findHTLCUtxo`
+        // returns empty and the subsequent claim fails with "No HTLC UTxO
+        // found for hash ...". Verify Blockfrost visibility before firing.
+        const utxoVisible = await cardano.cardanoHtlc.findHTLCUtxo(state.hashHex).catch(() => undefined);
+        if (!utxoVisible) {
+          // Blockfrost hasn't indexed the lock yet — wait for the next poll.
+          return;
+        }
         finishBlockfrost({
           hashHex: state.hashHex,
-          amountLovelace: BigInt(state.adaAmount) * 1_000_000n,
+          amountLovelace: utxoVisible.assets.lovelace ?? BigInt(state.adaAmount) * 1_000_000n,
           deadlineMs: BigInt(dbSwap.cardanoDeadlineMs),
-          senderPkh: dbSwap.bobPkh ?? '', // the taker's PKH — not strictly needed here
+          senderPkh: dbSwap.bobPkh ?? '',
           receiverPkh: cardano.paymentKeyHash,
         });
       }
