@@ -1,444 +1,648 @@
-# Cross-Chain Atomic Swap: Midnight (USDC) <-> Cardano (ADA)
+# Cross-Chain Atomic Swap: Midnight (USDC) ⇄ Cardano (ADA)
 
-## What This Project Is
+> **Who this document is for.** A frontend-designer Claude session that inherits a working dApp and needs to polish it into a production-ready UI. The protocol, contracts, wallet bootstrap, state machines, observables, and orchestrator are DONE and VERIFIED. Do not rewrite them. Read the "Browser architecture" section, map it to the "Current UI surface", and focus on visual polish, error handling edges, accessibility,, empty states, and production deployment concerns flagged in "Not production-ready yet".
 
-A trustless cross-chain atomic swap between **Midnight** (privacy-focused L1) and **Cardano** (Preprod testnet). Alice trades ADA for native USDC; Bob trades native USDC for ADA. Neither party can cheat — escrow is hash-time-locked on both chains, and if either side times out the funds reclaim to the original sender.
+---
 
-The Midnight side has been **split into two contracts**:
+## 1. What this project is
 
-- `usdc.compact` — pure USD Coin minter built on Midnight's native unshielded-token primitives (`mintUnshieldedToken` / `receiveUnshielded` / `sendUnshielded`). No internal balance map; coins live in user wallets at the Zswap layer, analogous to ADA in Cardano UTXOs.
-- `htlc.compact` — generic, color-parametric hash-time-locked escrow that holds native unshielded coins of any color. Pulls coins in on deposit, releases to receiver on `withdrawWithPreimage` or back to sender on `reclaimAfterExpiry`.
+A trustless cross-chain atomic swap between **Midnight** (privacy-focused L1) and **Cardano Preprod**. Alice trades ADA for native USDC; Bob trades USDC for ADA. Neither party can cheat — escrow is hash-time-locked on both chains, and if either side times out the funds reclaim to the original sender.
 
-This decoupling mirrors the Cardano design: HTLC is a pure escrow that holds a native asset, never an ERC20-ish ledger embedded in the same contract.
+**Two Midnight contracts** (deliberate split):
 
-## Current Status (as of 2026-04-21)
+- `usdc.compact` — pure USD Coin minter over Midnight's native unshielded-token primitives (`mintUnshieldedToken` / `receiveUnshielded` / `sendUnshielded`). No internal ledger — coins live in user wallets as Zswap UTXOs.
+- `htlc.compact` — generic, color-parametric hash-time-locked escrow. Pulls coins in on deposit, releases to receiver on `withdrawWithPreimage`, refunds to sender on `reclaimAfterExpiry`. Works with any color, not just USDC.
 
-**End-to-end swap verified GREEN on preprod.** Two-terminal flow (Alice + Bob) executed successfully:
+**One Cardano validator**: `cardano/validators/htlc.ak` (Aiken → Plutus V3). Standard hash-time-lock, off-chain driver via Lucid Evolution.
 
-- Hash: `7f6efe70e52d60e98f0edbf8a59b24ddc4647a8b4c8fff3724ec75338fd65b8d`
-- Cardano lock tx: `5313d894ff268adbd3ba0355f5929283592a42182e4f81da6c500fa27bc0b177`
-- Cardano claim tx: `7b5d27c1ce2648122c75d62f61a66c7f98a55b0840dbbdeae09b9fb0dd9230f5`
-- Alice's `withdrawWithPreimage` succeeded without hitting the `Only designated receiver` assertion (this was the bug that blocked the prior run — see "Known Incidents & Fixes" below).
-- Bob's watcher picked up the preimage from Midnight's `revealedPreimages`, claimed ADA on Cardano.
-- Funds flowed correctly: Alice `-1 ADA / +1 USDC`, Bob `+1.34903 ADA / -1 USDC` (ADA delta differs because Alice's lock carries min-UTxO overhead).
+## 2. Current status (what works)
 
-**What this proves:** the contract split (usdc + htlc), the Compact native-unshielded coin I/O (`receiveUnshielded` / `sendUnshielded`), the `revealedPreimages` reveal-and-read mechanism, the Cardano validFrom slot-alignment fix, and the `pending-swap.json` Alice→Bob coordination all work together.
+### Verified end-to-end on preprod
 
-**What's next:** integrate this flow into a browser frontend. See "Frontend Integration Roadmap" at the bottom.
+**Two-browser swap, 2026-04-21:** hash `7f6efe70…`. Alice locked ADA in Eternl, shared URL, Bob opened in second browser, deposited USDC via Lace, Alice claimed, Bob claimed. Funds moved correctly on both chains.
 
-## Project Layout
+**CLI regression (single-process):** `npx tsx htlc-ft-cli/src/execute-swap.ts` — passes.
+
+**CLI two-terminal (preprod):** `alice-swap.ts` + `bob-swap.ts` coordinated via `pending-swap.json` — green.
+
+### What the verification proves
+
+- Contract split (htlc + usdc) is load-bearing-correct.
+- Native unshielded coin I/O (`receiveUnshielded` / `sendUnshielded`) works in circuit + balances correctly against wallet UTXOs.
+- `revealedPreimages` reveal-and-read mechanism lets Bob learn the preimage from Midnight and claim Cardano.
+- Cardano `validFrom` slot-alignment fix (`+1000ms`) unblocks the reclaim path.
+- Browser wallet integration via `@midnight-ntwrk/dapp-connector-api` (Lace/1AM) + CIP-30 (Eternl) both work.
+- bech32m → Bytes<32> decoding via `@midnight-ntwrk/wallet-sdk-address-format` fixes the "Only designated receiver" bug (Landmine #1, see §11).
+
+### The "what's next" for you
+
+The behavior is complete. The UI is functional. Your job is to make it feel like a product people would trust to move real money through (even if the money here is preprod tADA and test USDC). See §12.
+
+## 3. Repo layout
 
 ```
 example-bboard/
-├── contract/                        # Midnight smart contracts (Compact language)
+├── CLAUDE.md                                   ← you are here
+├── contract/                                   ← Midnight smart contracts (Compact)
+│   └── src/
+│       ├── htlc.compact                        ← generic HTLC escrow
+│       ├── usdc.compact                        ← USDC minter
+│       ├── htlc-contract.ts                    ← TS wrapper exposing CompiledHTLCContract
+│       ├── usdc-contract.ts                    ← TS wrapper exposing CompiledUSDCContract
+│       └── managed/
+│           ├── htlc/                           ← compiled: keys/, zkir/, contract/index.d.ts
+│           └── usdc/                           ← compiled: keys/, zkir/, contract/index.d.ts
+│
+├── cardano/                                    ← Aiken validator
+│   ├── validators/htlc.ak
+│   └── plutus.json                             ← compiled blueprint (copied into htlc-ui/public)
+│
+├── htlc-ft-cli/                                ← reference CLI implementation (behavioral spec)
+│   └── src/
+│       ├── execute-swap.ts                     ← single-process regression
+│       ├── alice-swap.ts / bob-swap.ts         ← two-terminal flow (reference for UI state machines)
+│       ├── reclaim-ada.ts / reclaim-usdc.ts    ← refund paths
+│       ├── setup-contract.ts                   ← deploys both contracts, mints seed USDC
+│       ├── mint-usdc.ts                        ← mint more USDC after setup
+│       ├── midnight-watcher.ts                 ← polls indexer (deposits + revealedPreimages)
+│       ├── cardano-watcher.ts                  ← polls Blockfrost (HTLC UTxOs, filter by PKH + hash)
+│       ├── cardano-htlc.ts                     ← Lucid Evolution driver for the Aiken validator
+│       ├── midnight-wallet-provider.ts         ← CLI-only seed wallet (browser uses dapp-connector-api)
+│       ├── config.ts                           ← MIDNIGHT_NETWORK=preprod|undeployed switch
+│       └── …
+│
+├── htlc-ui/                                    ← THE frontend (the thing you are polishing)
+│   ├── public/
+│   │   ├── keys/                               ← populated by predev (htlc + usdc prover/verifier keys)
+│   │   ├── zkir/                               ← populated by predev (htlc + usdc zkir)
+│   │   └── plutus.json                         ← populated by predev (Cardano blueprint)
 │   ├── src/
-│   │   ├── htlc.compact             # Generic native-token HTLC escrow (THE main contract)
-│   │   ├── usdc.compact             # USDC native unshielded-token minter
-│   │   ├── htlc-contract.ts         # TypeScript wrapper for htlc
-│   │   ├── usdc-contract.ts         # TypeScript wrapper for usdc
-│   │   ├── managed/htlc/            # Compiled HTLC artifacts (prover/verifier keys, ZKIR)
-│   │   ├── managed/usdc/            # Compiled USDC artifacts
-│   │   ├── managed/bboard/          # (Legacy) compiled artifacts for the original Bulletin Board demo
-│   │   ├── bboard.compact           # (Legacy) Bulletin Board contract — retained as UI scaffolding reference
-│   │   ├── test/
-│   │   │   └── sha256-equivalence.test.ts  # Proves Compact persistentHash<Bytes<32>> == Node createHash('sha256')
-│   │   └── vendor/openzeppelin/     # Retained for reference; no longer imported by HTLC
-│   └── package.json
+│   │   ├── main.tsx                            ← CssBaseline + Theme + Toast + Swap providers
+│   │   ├── App.tsx                             ← BrowserRouter + 8 routes
+│   │   ├── globals.ts                          ← Buffer / process polyfills (keep as-is)
+│   │   ├── vite-env.d.ts
+│   │   ├── swap-state.json                     ← contract addresses + usdcColor (copy of htlc-ft-cli's)
+│   │   ├── in-memory-private-state-provider.ts ← per-contract private-state cache
+│   │   ├── config/
+│   │   │   ├── theme.ts                        ← MUI dark theme (midnightGrey primary)
+│   │   │   └── limits.ts                       ← runtime-configurable safety windows (env-overridable)
+│   │   ├── api/
+│   │   │   ├── common-types.ts                 ← HTLCProviders, USDCProviders, HTLCEntry, derived state
+│   │   │   ├── key-encoding.ts                 ← bech32m ↔ Bytes<32>, userEither() helper
+│   │   │   ├── htlc-api.ts                     ← HtlcAPI (state$ + deposit/withdraw/reclaim)
+│   │   │   ├── usdc-api.ts                     ← UsdcAPI (state$ + mint)
+│   │   │   ├── cardano-htlc-browser.ts         ← CardanoHTLCBrowser (CIP-30 version of cardano-htlc.ts)
+│   │   │   ├── midnight-watcher.ts             ← watchForHTLCDeposit / watchForPreimageReveal
+│   │   │   ├── cardano-watcher.ts              ← watchForCardanoLock / waitForCardanoHTLCConsumed
+│   │   │   └── orchestrator-client.ts          ← typed REST client for htlc-orchestrator
+│   │   ├── contexts/
+│   │   │   ├── BrowserHtlcManager.ts           ← wallet bootstrap (Lace semver check + decoded keys)
+│   │   │   ├── SwapContext.tsx                 ← Midnight + Cardano session state
+│   │   │   ├── ToastContext.tsx                ← app-wide Snackbar queue
+│   │   │   └── index.ts
+│   │   ├── hooks/
+│   │   │   ├── useSwapContext.ts
+│   │   │   ├── useToast.ts
+│   │   │   └── index.ts
+│   │   └── components/
+│   │       ├── Layout/{MainLayout,Header,index}.tsx
+│   │       ├── Landing.tsx                     ← role picker + deployed-contract info
+│   │       ├── WalletConnect.tsx               ← dual-wallet connect card
+│   │       ├── WalletGate.tsx                  ← "install extension" gate for pages that need wallets
+│   │       ├── AliceSwap.tsx                   ← Alice state machine (9 steps)
+│   │       ├── BobSwap.tsx                     ← Bob state machine (11 steps)
+│   │       ├── Browse.tsx                      ← discover open offers (polls orchestrator)
+│   │       ├── Reclaim.tsx                     ← list-driven + manual-by-hash refund
+│   │       ├── MintUsdc.tsx                    ← self-serve mint (calls USDC contract)
+│   │       ├── Dashboard.tsx                   ← observability over all orchestrator swaps
+│   │       ├── HowTo.tsx                       ← plain-prose protocol explainer
+│   │       ├── ShareUrlCard.tsx                ← QR + copy + native share (navigator.share)
+│   │       ├── SwapStatusChip.tsx              ← unified status vocabulary
+│   │       ├── AsyncButton.tsx                 ← spinner + "check your wallet" hint
+│   │       ├── RecoveryBanner.tsx              ← global banner if user has reclaimable swaps
+│   │       └── index.ts
+│   ├── .env.preprod                            ← VITE_NETWORK_ID + proof server + Blockfrost key
+│   ├── index.html
+│   ├── package.json                            ← predev copies keys/zkir/plutus.json into public/
+│   └── vite.config.ts
 │
-├── htlc-ft-cli/                     # CLI tools for running swaps — THE working reference implementation
-│   ├── src/
-│   │   ├── execute-swap.ts          # Automated end-to-end swap (single-process regression harness)
-│   │   ├── alice-swap.ts            # Alice's two-terminal flow (initiator)
-│   │   ├── bob-swap.ts              # Bob's two-terminal flow (responder)
-│   │   ├── reclaim-usdc.ts          # Bob's Midnight USDC reclaim after expiry
-│   │   ├── reclaim-ada.ts           # Alice's Cardano ADA reclaim after deadline
-│   │   ├── setup-contract.ts        # Deploys both contracts, mints initial USDC, writes swap-state.json
-│   │   ├── mint-usdc.ts             # Mint more native USDC after setup
-│   │   ├── smoke-native.ts          # Deposit + reclaim smoke test on Midnight only (no Cardano)
-│   │   ├── smoke-cardano-reclaim.ts # Lock + reclaim on Cardano HTLC (post-deadline)
-│   │   ├── midnight-watcher.ts      # Polls indexer for deposits + revealedPreimages
-│   │   ├── cardano-watcher.ts       # Polls Blockfrost for HTLC UTxOs; filters by receiver PKH + hash
-│   │   ├── cardano-htlc.ts          # Cardano off-chain module (Lucid Evolution)
-│   │   ├── regenerate-midnight-keys.ts  # ⚠ KNOWN BUG: writes Night pubkey into `coinPublicKey` field. See Incidents.
-│   │   ├── config.ts                # Network selector: MIDNIGHT_NETWORK=preprod|undeployed
-│   │   ├── midnight-wallet-provider.ts  # Seed-based wallet provider (CLI-only). UI needs dapp-connector-api instead.
-│   │   ├── wallet-utils.ts
-│   │   ├── generate-dust.ts
-│   │   ├── mint-tnight.ts
-│   │   ├── generate-keys.ts
-│   │   ├── check-balance.ts
-│   │   ├── check-midnight-balance.ts
-│   │   └── send-ada.ts
-│   ├── address.json                 # Alice/Bob/Charlie addresses (both chains).
-│   │                                # ⚠ midnight.coinPublicKey field is semantically WRONG (Night key, not Zswap key);
-│   │                                # alice-swap bypasses it by publishing the runtime key to pending-swap.json.
-│   ├── swap-state.json              # Written by setup-contract: contract addresses + usdcColor
-│   ├── pending-swap.json            # Written by alice-swap: hash + runtime coinPublicKey for Bob's filter + receiverAuth
-│   └── .env                         # BLOCKFROST_API_KEY
-│
-├── api/                             # (Legacy) Bulletin Board API layer (`BBoardAPI`). Reference for how to structure
-│                                    # a frontend-facing API wrapping a deployed contract. Not yet adapted for HTLC.
-│
-├── bboard-ui/                       # (Legacy) Bulletin Board Vite/React frontend. Reference for:
-│                                    #   - Lace wallet integration via @midnight-ntwrk/dapp-connector-api
-│                                    #   - ConnectedAPI / InitialAPI flow in BrowserDeployedBoardManager.ts
-│                                    #   - FetchZkConfigProvider for browser-side ZK key fetching
-│                                    #   - MUI + react-router-dom UX scaffolding
-│
-├── bboard-cli/                      # (Legacy) Bulletin Board CLI. Superseded by htlc-ft-cli.
-│
-└── cardano/                         # Cardano validators (Aiken language)
-    ├── validators/
-    │   ├── htlc.ak                  # HTLC spending validator
-    │   └── swap_token.ak            # One-shot minting policy
-    ├── lib/htlc/                    # Types and validation logic
-    └── plutus.json                  # Compiled Plutus blueprint
+└── htlc-orchestrator/                          ← advisory backend (enhances UX, never authoritative)
+    └── src/
+        ├── server.ts                           ← Fastify + CORS + routes + watchers
+        ├── db.ts                               ← better-sqlite3 WAL-mode store
+        ├── schema.sql
+        ├── types.ts                            ← Swap, SwapStatus, CreateSwapBody, PatchSwapBody
+        ├── routes/swaps.ts                     ← POST/GET/PATCH /api/swaps
+        ├── midnight-watcher.ts                 ← indexer poller → status transitions
+        ├── cardano-watcher.ts                  ← Blockfrost poller → status transitions
+        └── stuck-alerter.ts                    ← Slack/Discord/raw-JSON webhook (opt-in)
 ```
 
-## How the Atomic Swap Works
+Legacy scaffolding still present (DO NOT delete — reference material only):
+- `api/` — old BBoard API layer (template that `HtlcAPI` / `UsdcAPI` copy from).
+
+
+## 4. The HTLC contract (generic escrow)
+
+**File:** `contract/src/htlc.compact` · **Compiled TS surface:** `contract/src/managed/htlc/contract/index.d.ts`
+
+### Circuits
+
+```typescript
+// Lock: pulls `amount` coins of `color` from caller (receiveUnshielded),
+//       records the whole record keyed by `hash`.
+deposit(args): []
+
+// Claim: caller's ownPublicKey must match receiverAuth; preimage is persisted
+//        in revealedPreimages[hash] so the other chain can read it;
+//        coins go to receiverPayout; amount sentinel set to 0.
+withdrawWithPreimage(arg): []
+
+// Refund after deadline: caller must match senderAuth; coins go to senderPayout.
+reclaimAfterExpiry(arg): []
+```
+
+### Ledger (all `export ledger`, indexer-queryable)
+
+```typescript
+htlcAmounts:        Map<Bytes<32>, Uint<128>>        // 0 = completed sentinel
+htlcExpiries:       Map<Bytes<32>, Uint<64>>         // seconds since epoch
+htlcColors:         Map<Bytes<32>, Bytes<32>>
+htlcSenderAuth:     Map<Bytes<32>, Bytes<32>>        // ZswapCoinPublicKey.bytes
+htlcReceiverAuth:   Map<Bytes<32>, Bytes<32>>
+htlcSenderPayout:   Map<Bytes<32>, Either<ContractAddress, UserAddress>>
+htlcReceiverPayout: Map<Bytes<32>, Either<ContractAddress, UserAddress>>
+revealedPreimages:  Map<Bytes<32>, Bytes<32>>        // populated by withdrawWithPreimage
+```
+
+Compact maps have no `delete` — sentinel values (amount=0) mark completion. **Auth** (receiver/sender key checked in circuit) and **payout** (destination address) are stored separately because Compact cannot derive one from the other inside a circuit.
+
+## 5. The USDC contract (native-token minter)
+
+**File:** `contract/src/usdc.compact` · **Compiled TS surface:** `contract/src/managed/usdc/contract/index.d.ts`
+
+### Circuits
+
+```typescript
+mint(recipient: Either<ContractAddress, UserAddress>, amount: Uint<64>): []
+// First call captures _color via mintUnshieldedToken(domainSep, amount, recipient).
+// Subsequent calls mint more of that same color.
+name(): Opaque<"string">
+symbol(): Opaque<"string">
+decimals(): Uint<8>
+color(): Bytes<32>
+```
+
+### Ledger
+
+```typescript
+_name:       Opaque<"string">  (sealed — constructor)
+_symbol:     Opaque<"string">  (sealed — constructor)
+_decimals:   Uint<8>           (sealed — constructor)
+_domainSep:  Bytes<32>         (sealed — constructor)
+_color:      Bytes<32>         (NOT sealed — set on first mint)
+```
+
+No on-chain balance map; USDC lives as native unshielded UTXOs in holders' Zswap wallets, exactly analogous to how ADA lives in Cardano UTxOs.
+
+**Security note for UI:** `mint()` currently has **no access control** — anyone connected can mint arbitrary USDC. This is fine for preprod demos but is something production gating (or an RBAC wrapper contract) would need to address. The `/mint-usdc` page is advertised as a convenience for people who want to test Bob's role.
+
+## 6. The Cardano HTLC (Aiken validator)
+
+**File:** `cardano/validators/htlc.ak` · **Compiled:** `cardano/plutus.json` (copied into `htlc-ui/public/plutus.json` by predev)
+
+PlutusV3 spending validator:
+
+- **Datum:** `{ preimageHash, sender (PKH), receiver (PKH), deadline (POSIX ms) }`
+- **Redeemer:** `Withdraw { preimage }` | `Reclaim`
+- **Withdraw:** `sha256(preimage) == datum.preimageHash` AND `upper_bound < deadline` AND signer = receiver
+- **Reclaim:** `lower_bound > deadline` (strict) AND signer = sender
+
+### The validFrom slot-alignment landmine (reclaim path)
+
+On Preprod (1 slot = 1 s), `validFrom(posixMs)` floors to the slot's POSIX start. If `posixMs == deadline`, the tx's `lower_bound` equals `deadline`, and the Aiken check `lower_bound > deadline` fails strictly. **Fix:** offset `+1000ms` past the deadline before setting `validFrom`. Implemented in both `htlc-ft-cli/src/cardano-htlc.ts::reclaim()` and `htlc-ui/src/api/cardano-htlc-browser.ts::reclaim()`. Leave this alone.
+
+## 7. The atomic swap protocol (what the UI is orchestrating)
 
 ```
 Alice has ADA on Cardano, wants native USDC on Midnight.
 Bob has native USDC on Midnight, wants ADA on Cardano.
 
-1. Alice generates a random 32-byte PREIMAGE and computes HASH = SHA256(PREIMAGE).
-2. Alice locks ADA on Cardano HTLC (keyed by HASH, ~2h deadline, receiver = Bob).
-   Alice also writes HASH + her runtime coinPublicKey to pending-swap.json
-   so Bob can filter his watcher and use the correct receiverAuth.
-3. Bob watches Cardano, matches Alice's lock by HASH, deposits native USDC
-   on Midnight HTLC (same HASH, ≥10min shorter deadline than Alice's,
-   receiverAuth = Alice's runtime coinPublicKey from pending-swap.json).
-4. Alice claims USDC on Midnight by calling withdrawWithPreimage(PREIMAGE).
-   This reveals PREIMAGE in the HTLC's revealedPreimages map and passes
-   the ownPublicKey().bytes == htlcReceiverAuth assertion.
-5. Bob watches Midnight's revealedPreimages map and reads PREIMAGE.
-6. Bob claims ADA on Cardano with PREIMAGE.
-   Cardano validator checks sha256(PREIMAGE) == datum.preimageHash.
+STEP 1.  Alice generates a random 32-byte PREIMAGE → HASH = SHA256(PREIMAGE).
+STEP 2.  Alice locks ADA on Cardano HTLC:
+            datum = { hash, sender=alice, receiver=bob, deadline=now+~2h }
+         Alice publishes a share URL to Bob (hash, her Zswap coinPublicKey,
+                                             her unshielded address, deadline,
+                                             amounts).
+STEP 3.  Bob watches Cardano, finds Alice's lock by hash, validates deadline
+         safety, then deposits native USDC on Midnight HTLC:
+            deposit(
+              color=usdcColor, amount, hash,
+              expiryTime = Bob-deadline < Alice-deadline - safety-buffer,
+              receiverAuth=alice's Zswap coinPublicKey bytes,
+              receiverPayout=alice's unshielded address,
+              senderPayout=bob's unshielded address,
+            )
+STEP 4.  Alice claims USDC on Midnight:
+            withdrawWithPreimage(PREIMAGE)
+         This reveals PREIMAGE in revealedPreimages[hash] AND passes the
+         ownPublicKey().bytes == htlcReceiverAuth assertion.
+STEP 5.  Bob reads PREIMAGE from Midnight's revealedPreimages[hash].
+STEP 6.  Bob claims ADA on Cardano with PREIMAGE.
+         Cardano validator checks sha256(PREIMAGE) == datum.preimageHash.
 
-If either side times out, the original sender reclaims:
-  - Alice's ADA on Cardano after her deadline (Reclaim redeemer) → reclaim-ada.ts.
-  - Bob's USDC on Midnight after his deadline (reclaimAfterExpiry circuit) → reclaim-usdc.ts.
+Failure paths (reclaim):
+  - Alice's ADA on Cardano after deadline → reclaim-ada.ts / Reclaim.tsx.
+  - Bob's USDC on Midnight after deadline → reclaim-usdc.ts / Reclaim.tsx.
 ```
 
-## The HTLC Contract (Midnight, Generic Escrow)
+Chain state is the source of truth. The orchestrator's SQLite DB is a **view** for discovery/UX; it is never used to authorize a swap step.
 
-**File:** `contract/src/htlc.compact`
+## 8. Browser architecture (`htlc-ui/`)
 
-Pure color-parametric escrow over native unshielded tokens. No token ledger of its own — it pulls/pushes `Uint<128>` coins of an arbitrary `color: Bytes<32>` via the Zswap primitives.
+### Bootstrap order (`main.tsx`)
 
-**Circuits:**
-- `deposit(color, amount, hash, expiryTime, receiverAuth, receiverPayout, senderPayout)` — pulls `amount` coins of `color` via `receiveUnshielded`, records parties + deadline + color keyed by `hash`.
-- `withdrawWithPreimage(preimage)` — receiver-authenticated claim; derives `hash = persistentHash<Bytes<32>>(preimage)`, sends coins to `receiverPayout`, writes `revealedPreimages[hash] = preimage`, marks amount=0.
-- `reclaimAfterExpiry(hash)` — sender-authenticated refund after `blockTimeGt(expiry)`.
-
-**Auth vs. payout separation.** Each entry stores two things per party: a `Bytes<32>` auth key (`ZswapCoinPublicKey` bytes, checked against `ownPublicKey().bytes`) and a payout destination (`Either<ContractAddress, UserAddress>`, consumed by `sendUnshielded`). Compact currently has no primitive to derive one from the other inside a circuit, so both must be passed explicitly.
-
-**Ledger state (all `export ledger`, indexer-queryable):**
-- `htlcAmounts: Map<Bytes<32>, Uint<128>>` — escrowed amount per hash; `0` is the completed-swap sentinel.
-- `htlcExpiries: Map<Bytes<32>, Uint<64>>`
-- `htlcColors: Map<Bytes<32>, Bytes<32>>`
-- `htlcSenderAuth`, `htlcReceiverAuth: Map<Bytes<32>, Bytes<32>>`
-- `htlcSenderPayout`, `htlcReceiverPayout: Map<Bytes<32>, Either<ContractAddress, UserAddress>>`
-- `revealedPreimages: Map<Bytes<32>, Bytes<32>>` — populated by `withdrawWithPreimage`, read by Bob's watcher.
-
-Maps have no `delete`, so sentinel values are used.
-
-## The USDC Contract (Native Token Minter)
-
-**File:** `contract/src/usdc.compact`
-
-Minter for native Zswap unshielded coins with a deterministic color. Constructor takes `(tokenName, tokenSymbol, tokenDecimals, domainSep)`. The domainSep + contract address fully determine the color via `mintUnshieldedToken`.
-
-**Circuits:**
-- `mint(recipient: Either<ContractAddress, UserAddress>, amount: Uint<64>)` — mints `amount` native coins of this token's color to `recipient`. First call captures `_color`.
-- `name() / symbol() / decimals() / color()` — impure metadata reads.
-
-`_color` is `export ledger Bytes<32>` (not sealed) so it can be set on first mint. There is no on-chain balance map — holders' balances live as native unshielded UTXOs in their wallets.
-
-## The Cardano HTLC (Aiken Validator)
-
-**File:** `cardano/validators/htlc.ak` · **Compiled:** `cardano/plutus.json`
-
-PlutusV3 spending validator:
-- **Datum:** `{ preimageHash, sender (PKH), receiver (PKH), deadline (POSIX ms) }`
-- **Redeemer:** `Withdraw { preimage }` or `Reclaim`
-- **Withdraw:** `sha256(preimage) == datum.preimageHash`, `upper_bound < deadline`, signer is receiver
-- **Reclaim:** `lower_bound > deadline` (strict), signer is sender
-
-Off-chain uses Lucid Evolution (`cardano-htlc.ts`).
-
-### validFrom slot-alignment pitfall (reclaim path)
-
-On Preprod (1-slot = 1s), `validFrom(posixMs)` floors to the slot's POSIX start = `slotFromUnixTime(posixMs) * 1000ms`. If `posixMs == deadline`, the tx's `lower_bound` becomes exactly `deadline`, and the Aiken check `lower_bound > deadline` is strictly greater-than, so the reclaim fails on-chain. The fix is to offset by one whole slot past the deadline (`+1000ms`). This lives inside `CardanoHTLC.reclaim()`.
-
-## Build & Compile Process
-
-### Compact contracts (Midnight)
-
-```bash
-cd contract
-
-# Compile .compact -> managed artifacts (ZKIR + prover/verifier keys)
-npm run compact:htlc     # -> src/managed/htlc/
-npm run compact:usdc     # -> src/managed/usdc/
-
-# TypeScript build + copy managed/ + copy .compact sources into dist/
-npm run build:all
+```
+<CssBaseline />
+<ThemeProvider theme={theme}>             ← src/config/theme.ts
+  <ToastProvider>                         ← src/contexts/ToastContext.tsx
+    <SwapProvider logger={logger}>        ← src/contexts/SwapContext.tsx
+      <App />
+    </SwapProvider>
+  </ToastProvider>
+</ThemeProvider>
 ```
 
-The `compact` binary is at `/Users/kaleab/.local/bin/compact`. Do NOT use `npx compact` — it won't find it.
+`App.tsx` mounts `<MainLayout>` (Header + RecoveryBanner + Container) and 8 routes:
 
-**IMPORTANT:** After ANY `.compact` file change, compile + `build:all`, otherwise CLI scripts will use stale artifacts and silently break.
+| Path         | Component       | Purpose                                             |
+|--------------|-----------------|-----------------------------------------------------|
+| `/`          | `Landing`       | Role picker, deployed-contract info, getting-started |
+| `/alice`     | `AliceSwap`     | Alice state machine (lock → share → wait → claim)   |
+| `/bob`       | `BobSwap`       | Bob state machine (watch → deposit → wait → claim)  |
+| `/browse`    | `Browse`        | Discover open offers (filtered by Bob PKH)          |
+| `/reclaim`   | `Reclaim`       | Recover stuck funds                                 |
+| `/mint-usdc` | `MintUsdc`      | Self-serve USDC mint to get Bob started             |
+| `/dashboard` | `Dashboard`     | All swaps the orchestrator knows about              |
+| `/how-to`    | `HowTo`         | Plain-prose protocol explainer                      |
+| `*`          | → `/`           | catch-all                                           |
 
-### NPM scripts
+### The provider chain
 
-**Contract (`contract/package.json`):**
-```
-compact:htlc    # compact compile src/htlc.compact ./src/managed/htlc
-compact:usdc    # compact compile src/usdc.compact ./src/managed/usdc
-build:all       # rm -rf dist && tsc && cp managed + .compact into dist
-test            # vitest — includes sha256-equivalence.test.ts
-typecheck       # tsc --noEmit
-lint            # eslint src
-```
+**`BrowserHtlcManager.ts`** — the hardest-to-rederive code. Bootstraps everything for a given connected wallet:
 
-**CLI (`htlc-ft-cli/package.json`):**
-```
-setup           # Deploy both contracts + mint initial USDC to participants
-mint-usdc       # Mint more USDC to a participant
-swap:alice      # Run Alice's initiator flow
-swap:bob        # Run Bob's responder flow
-reclaim-ada     # Alice recovers ADA after Cardano deadline
-reclaim-usdc    # Bob recovers USDC after Midnight deadline
-mint-tnight     # Mint tNight to wallets
-check-balance   # Cardano ADA balance
-check-midnight  # Midnight balance
-typecheck       # tsc --noEmit
-```
+1. Polls `window.midnight?.[key]` every 100 ms (RxJS `interval(100) / timeout(5000)`) until a Lace-compatible API appears. Filters by semver (`COMPATIBLE_CONNECTOR_API_VERSION = '4.x'`).
+2. Calls `initialAPI.enable()` → `connectedAPI`.
+3. Fetches `getConfiguration()`, `getShieldedAddresses()`, `getUnshieldedAddress()`.
+4. **Decodes bech32m → Bytes<32>** via `src/api/key-encoding.ts` (the Landmine #1 fix — do NOT remove this; see §11).
+5. Builds two provider bundles: `HTLCProviders` and `USDCProviders`. Shares `publicDataProvider`, `walletProvider`, `midnightProvider`, `proofProvider` across both; each gets its own `inMemoryPrivateStateProvider`.
+6. Returns `SwapBootstrap { networkId, htlcProviders, usdcProviders, coinPublicKey{Bytes,Hex,Bech32m}, unshieldedAddress{Bytes,Hex,Bech32m}, connectedAPI }`.
 
-All CLI scripts run via: `node --experimental-specifier-resolution=node --loader ts-node/esm src/<script>.ts`.
+**`SwapContext.tsx`** — React context around the bootstrap. Exposes:
 
-## Network Configuration
-
-The active Midnight network is selected by `MIDNIGHT_NETWORK=preprod|undeployed` (defaults to `undeployed`). See `htlc-ft-cli/src/config.ts`.
-
-**Midnight preprod (MIDNIGHT_NETWORK=preprod):**
-- Node: `https://rpc.preprod.midnight.network` / `wss://rpc.preprod.midnight.network`
-- Indexer: `https://indexer.preprod.midnight.network/api/v3/graphql` / `wss://...ws`
-- Proof Server: `http://127.0.0.1:6300` (**still local** — run the proof server yourself)
-- Faucet: `https://faucet.preprod.midnight.network/`
-
-**Midnight local dev (MIDNIGHT_NETWORK=undeployed):**
-- Node: `http://127.0.0.1:9944` / `ws://127.0.0.1:9944`
-- Indexer: `http://127.0.0.1:8088/api/v3/graphql` / `ws://127.0.0.1:8088/api/v3/graphql/ws`
-- Proof Server: `http://127.0.0.1:6300`
-
-**Cardano (Preprod testnet):**
-- Blockfrost: `https://cardano-preprod.blockfrost.io/api/v0`
-- API key in `.env`: `BLOCKFROST_API_KEY=...`
-
-Preview was dropped earlier due to `PPViewHashesDontMatch` errors from Blockfrost cost-model mismatch; Preprod does not have this problem.
-
-## Wallet Funding
-
-- **Midnight preprod:** faucet tNight to the `preprodAddress` from `address.json`. Dust auto-generates from it via `generateDust`. On preprod, dust sync takes ~15 min per wallet — budget accordingly.
-- **Midnight local dev:** ~1T tNight per participant for dust; local dev `additionalFeeOverhead` is 500Q. Use `mint-tnight.ts`.
-- **Cardano Preprod:** fund via faucet. Alice needs the ADA she wants to swap plus fees; Bob needs fees only.
-
-## Key Technical Details & Gotchas
-
-### Compact language
-- `Opaque<"string">`, `disclose(value)`, `persistentHash<T>(value)`.
-- `ownPublicKey()` — caller's `ZswapCoinPublicKey` (`.bytes` is `Bytes<32>`).
-- `receiveUnshielded(color, amount)` / `sendUnshielded(color, amount, recipient)` — native coin I/O.
-- `mintUnshieldedToken(domainSep, amount, recipient): Bytes<32>` — returns the derived color.
-- `blockTimeLt` / `blockTimeLte` / `blockTimeGt` — time comparisons over `Uint<64>` POSIX seconds or ms depending on context.
-- Map has no `delete`; use sentinel values (amount=0 = completed).
-- `sealed ledger` fields — write-once-in-constructor (`_color` is intentionally NOT sealed, since it's set on first `mint` call).
-
-### Native unshielded coin I/O
-`receiveUnshielded` in a circuit causes `midnight-js-contracts` to attach matching coin inputs of `color` from the caller's wallet. `sendUnshielded` creates an unshielded output to the specified recipient. Per-swap state in the ledger maps (amount, color, expiry, parties) is the source of truth for the contract's bookkeeping; the held coins are released against that state via `sendUnshielded`, and a completed swap is marked by `htlcAmounts[hash] = 0`.
-
-### TypeScript wrapper pattern
 ```typescript
-import { CompiledContract } from "@midnight-ntwrk/compact-js";
-import * as CompiledHTLC from "./managed/htlc/contract/index.js";
-
-export const CompiledHTLCContract = CompiledContract.make<HTLCContract>(
-  "Htlc",                                        // label derived from filename
-  CompiledHTLC.Contract<EmptyPrivateState>,
-).pipe(
-  // @ts-expect-error: Witnesses<EmptyPrivateState> = {}
-  CompiledContract.withWitnesses({}),
-  CompiledContract.withCompiledFileAssets("./managed/htlc"),
-);
+interface SwapContextValue {
+  session?: SwapSession;                   // { bootstrap, htlcApi, usdcApi }
+  cardanoSession?: CardanoSession;          // { cardanoHtlc, paymentKeyHash, address, api }
+  connectMidnight(): Promise<SwapSession>;  // idempotent; joins both contracts
+  connectCardano(walletName?): Promise<CardanoSession>;  // CIP-30 enable + Lucid selectWallet.fromAPI
+  disconnectMidnight(): void;
+  disconnectCardano(): void;
+  // flags: midnightConnecting, cardanoConnecting, midnightError, cardanoError
+}
 ```
 
-### Address encoding
-- `Either<ContractAddress, UserAddress>` is a tagged pair — fill the unused branch with zero bytes:
-  ```ts
-  // User payout:
-  { is_left: false, left: { bytes: new Uint8Array(32) }, right: { bytes: userAddrBytes } }
-  ```
-- Auth key: pass `Bytes<32>` (coin public key bytes), checked against `ownPublicKey().bytes` inside the circuit. **Source this from the live wallet provider at runtime, not from any cached file.** See "coinPublicKey auth mismatch" under Known Incidents.
+Separate inflight promises prevent double-connect races. Both connect calls are idempotent.
 
-### PublicDataProvider
-- **NOT a generic type** — use `PublicDataProvider`, never `PublicDataProvider<any>`.
-- `queryContractState(contractAddress)` → decode with `ledger(state.data)`.
+**`HtlcAPI` and `UsdcAPI`** (in `src/api/`) — mirror the old `BBoardAPI` pattern:
 
-### Midnight indexer
-- GraphQL; endpoint depends on `MIDNIGHT_NETWORK` (see Network Configuration).
-- `contractStateObservable()` for subscriptions, `queryContractState()` for polling.
+```typescript
+class HtlcAPI {
+  private constructor(
+    private readonly providers: HTLCProviders,
+    private readonly deployedContract: DeployedHTLCContract,
+    private readonly logger: Logger,
+  ) {}
 
-### Watcher pitfall: shared script address + concurrent HTLCs
-The Cardano script address is shared across ALL HTLCs (it's purely the compiled validator's script hash). `cardano-watcher.watchForCardanoLock` must filter by (a) receiver PKH, (b) freshness (`datum.deadline > now`), AND (c) specific `hashHex` from the coordinated swap. Without the hash filter, Bob can latch onto the wrong UTxO when concurrent or orphaned locks exist.
+  readonly state$: Observable<HTLCDerivedState>;   // derived via publicDataProvider.contractStateObservable
 
-Coordination is via `pending-swap.json`: Alice writes the hash after locking; Bob reads it (or takes `--hash` CLI arg / `SWAP_HASH` env var). See `alice-swap.ts` and `bob-swap.ts`. **Currently the preprod script address has ~6 stale unspent UTxOs from prior test runs — any no-filter watcher will latch onto one of them, corrupting the swap. Always publish + filter by hash.**
+  deposit(params: DepositParams): Promise<FinalizedTxData>
+  withdrawWithPreimage(preimage: Uint8Array): Promise<FinalizedTxData>
+  reclaimAfterExpiry(hash: Uint8Array): Promise<FinalizedTxData>
 
-### Deadline validation (bob-swap.ts)
-Before depositing on Midnight, Bob checks that Alice's Cardano deadline is at least `MIN_CARDANO_DEADLINE_WINDOW_SECS` (30min) away and picks a Midnight deadline `SAFETY_BUFFER_SECS` (10min) inside of it. Aborts if the margins cannot be satisfied — this protects Bob from a "lowballed deadline" race.
-
-### Non-interactive flags
-Both `alice-swap.ts` and `bob-swap.ts` accept `--yes` or respective `ALICE_ACCEPT_ALL=1` / `BOB_ACCEPT_ALL=1` env vars for unattended runs (two-terminal tests, CI). Alice additionally honours `ALICE_ADA`, `ALICE_USDC`, `ALICE_DEADLINE_MIN`.
-
-## Known Incidents & Fixes
-
-### 1. coinPublicKey auth mismatch (2026-04 — RESOLVED)
-
-**Symptom.** Alice's `withdrawWithPreimage` always failed inside the HTLC circuit with the `Only designated receiver can withdraw` assertion.
-
-**Root cause.** Two different public keys were being conflated:
-- The runtime's `ownPublicKey().bytes` inside the Compact circuit is derived from the **Zswap shielded** HD role: `ZswapSecretKeys.fromSeed(seeds.shielded).coinPublicKey`. See `htlc-ft-cli/src/midnight-wallet-provider.ts:47`.
-- `htlc-ft-cli/src/regenerate-midnight-keys.ts:24` derives keys using `Roles.NightExternal` (unshielded) and writes `createKeystore(...).getPublicKey()` into a field named `coinPublicKey` in `address.json`. That value is the **unshielded Night** pubkey, NOT the Zswap coin public key — but the field name lied.
-- Bob's deposit was passing `address.json.alice.midnight.coinPublicKey` (the Night pubkey, e.g. `8520863716...`) as the `receiverAuth` → stored in `htlcReceiverAuth`. When Alice called `withdrawWithPreimage`, her runtime `ownPublicKey().bytes` was the Zswap key (`b432786e9a...`). The two never matched.
-
-**Fix applied.** `alice-swap.ts:172` now captures `walletProvider.getCoinPublicKey()` at runtime and `alice-swap.ts:233` publishes it alongside the hash into `pending-swap.json`. `bob-swap.ts:190-308` reads `pending.aliceCoinPublicKey` and prefers it over `address.json`, emitting a note if the values differ. With this in place the 2026-04-21 swap completed cleanly.
-
-**Cleanup still owed.** `regenerate-midnight-keys.ts` should either (a) rename its output field from `coinPublicKey` to `nightPublicKey`, or (b) additionally derive the true Zswap coin public key via the SDK's Zswap role and write both. Until then, the `address.json.*.midnight.coinPublicKey` field is a landmine for anyone who trusts the name. **Do not add new readers of `address.json.*.midnight.coinPublicKey` without auditing whether they want the Night key or the Zswap key.**
-
-**Learning for frontend:** the UI must derive auth keys from the connected wallet at runtime (e.g. via `dapp-connector-api`'s `ConnectedAPI`), never from a static config. Inline the key-derivation call every time you build an HTLC tx.
-
-### 2. Stale UTxOs at the shared Cardano script address (ongoing)
-
-The preprod HTLC script address `addr_test1wqnjaplx5fswjr0ja7l2uuv890058f5qkak6cmdpqx8fn3q5v798e` accumulates stale UTxOs from every prior failed swap (observed: 6 unspent at time of writing). A watcher that matches on receiver PKH only can latch onto an unrelated UTxO. Always coordinate by hash (`pending-swap.json` or `--hash` CLI arg). Cleanup: each of those UTxOs is eventually reclaimable by its original sender via `reclaim-ada.ts` once its deadline passes.
-
-### 3. pending-swap.json coordination timing
-
-`bob-swap.ts` reads `pending-swap.json` only AFTER its wallet is built (~15 min preprod dust sync). If Bob is launched BEFORE Alice has written the file, his watcher falls back to "no hash filter" → unsafe (see Incident #2). The safe sequence is:
-1. Launch Alice first. Wait for her `Published hash to pending-swap.json` log line.
-2. Then launch Bob.
-
-A frontend that owns both roles in one session doesn't have this race — it can push the hash directly into the Bob-role state machine after Alice signs.
-
-## Verification Tests
-
-- `contract/src/test/sha256-equivalence.test.ts` — proves Compact's `persistentHash<Bytes<32>>` ≡ Node's `createHash('sha256')`. This is the load-bearing invariant of the cross-chain lock; if it ever diverged, swaps would silently fail. Run with `cd contract && npm test`.
-- `htlc-ft-cli/src/smoke-native.ts` — deposits + reclaims on Midnight only (no Cardano), useful for shaking out the `receiveUnshielded`/`sendUnshielded` path after contract edits.
-- `htlc-ft-cli/src/smoke-cardano-reclaim.ts` — locks on Cardano and reclaims past the deadline. Exercises the `Reclaim` redeemer and the validFrom slot-alignment offset.
-- `htlc-ft-cli/src/execute-swap.ts` — single-process end-to-end automated regression.
-- **Two-terminal flow on preprod** — `alice-swap.ts` + `bob-swap.ts` with `MIDNIGHT_NETWORK=preprod`. Green as of 2026-04-21.
-
-## Key Files to Read First
-
-1. `contract/src/htlc.compact` — the escrow
-2. `contract/src/usdc.compact` — the token minter
-3. `cardano/validators/htlc.ak` — the Cardano side
-4. `htlc-ft-cli/src/execute-swap.ts` — the regression harness (single-process)
-5. `htlc-ft-cli/src/alice-swap.ts` / `bob-swap.ts` — two-terminal flows (the reference for UI state machines)
-6. `htlc-ft-cli/src/cardano-watcher.ts` / `midnight-watcher.ts` — watchers
-7. `htlc-ft-cli/src/cardano-htlc.ts` — Cardano off-chain module
-8. `htlc-ft-cli/src/midnight-wallet-provider.ts` — **note:** this is the CLI seed-based provider. The browser must use `@midnight-ntwrk/dapp-connector-api` instead (see `bboard-ui/src/contexts/BrowserDeployedBoardManager.ts` for the pattern).
-
-## Running a Swap
-
-Prereqs: Cardano Preprod Blockfrost key in `.env`, wallets funded, local proof server up at `127.0.0.1:6300`, Midnight preprod endpoints reachable (or local dev node up if `MIDNIGHT_NETWORK=undeployed`).
-
-### One-shot regression (single process, local dev)
-
-```bash
-cd htlc-ft-cli
-npx tsx src/execute-swap.ts
+  static async join(providers: HTLCProviders, address: ContractAddress, logger: Logger): Promise<HtlcAPI>
+}
 ```
 
-### Two-terminal flow on preprod (the verified path)
+`HTLCDerivedState.entries` is a `ReadonlyMap<string, HTLCEntry>` keyed by hex hash.
+
+### Watchers
+
+All polling watchers live in `src/api/` and accept `AbortSignal` for cancellation:
+
+- **`watchForHTLCDeposit(publicDataProvider, htlcAddr, hashLockBytes, pollMs=5000, signal?)`** → `{ amount, expiry, color, senderAuth, receiverAuth }`. Resolves when `htlcAmounts[hash] > 0n`.
+- **`watchForPreimageReveal(publicDataProvider, htlcAddr, hashLockBytes, pollMs=5000, signal?)`** → `Uint8Array`. Resolves when `revealedPreimages[hash]` is populated.
+- **`watchForCardanoLock(cardanoHtlc, receiverPkh?, pollMs=10_000, hashHex?, signal?)`** → `{ hashHex, amountLovelace, deadlineMs, senderPkh, receiverPkh }`. **Filters by receiver PKH + specific hash + freshness (`deadline > now`)** — without this triple filter, Bob latches onto stale UTxOs at the shared script address (see §11).
+- **`waitForCardanoHTLCConsumed(…)`** — follow-up watcher used to confirm a claim/reclaim hit the chain.
+
+### State-machine components
+
+Both role components are `useReducer`-driven state machines. **Do not replace `useReducer` with Redux / Zustand / etc.** — the whole protocol fits in ~10 states and the reducer is easy to audit.
+
+**`AliceSwap.tsx`** — 9 states: `connect | params | locking | locked | waiting-deposit | claim-ready | claiming | done | error`.
+
+- Generates random 32-byte preimage (`crypto.getRandomValues`) and hashes it (`crypto.subtle.digest('SHA-256', …)`).
+- Locks ADA via `cardanoHtlc.lock(lovelace, hashHex, bobPkh, deadlineMs)`.
+- **Persists pending swap in `localStorage`** under `htlc-ui:alice-pending-swap:<hash>` (preimage + hash + deadline + amounts) so a page refresh doesn't lose the preimage. Trade-off: preimage in `localStorage` is not great for a prod app but the alternative — losing the preimage mid-swap — is worse.
+- Shares a URL built from `URLSearchParams`: `?role=bob&hash=…&aliceCpk=…&aliceUnshielded=…&cardanoDeadlineMs=…&adaAmount=…&usdcAmount=…`.
+- **Dual-path deposit detection** during wait: Midnight indexer (via `session.htlcApi.state$`) **AND** orchestrator poll (every 2 s). First signal wins. The orchestrator path is usually ~5 s faster but is advisory — chain state still has to confirm.
+- On claim, calls `session.htlcApi.withdrawWithPreimage(preimage)`.
+
+**`BobSwap.tsx`** — 11 states: `need-url | connect | watching-cardano | confirm | unsafe-deadline | depositing | waiting-preimage | claim-ready | claiming | done | error`.
+
+- Reads URL params; if missing, routes to `need-url`.
+- Watches Cardano for Alice's lock (filters by Bob's own PKH + hash).
+- Safety checks (from `src/config/limits.ts`):
+  - `cardanoRemaining < limits.bobMinCardanoWindowSecs` → `unsafe-deadline`
+  - `bobTtlSecs < limits.bobMinDepositTtlSecs` after safety-buffer truncation → `unsafe-deadline`
+- Deposit call passes Alice's decoded bytes (`receiverAuth`, `receiverPayout`) and Bob's own unshielded address (`senderPayout`).
+- Waits on preimage via Midnight watcher **OR** orchestrator poll (same race pattern as Alice).
+- Claims ADA via `cardanoHtlc.claim(preimageHex)`.
+
+All long-running operations wrap user actions in `<AsyncButton>` so the button disables + spins + surfaces "check your wallet" after `limits.walletPopupHintMs`.
+
+### bech32m encoding helpers (`src/api/key-encoding.ts`)
+
+```typescript
+decodeShieldedCoinPublicKey(bech32: string, networkId: NetworkId): Uint8Array  // 32 bytes
+encodeShieldedCoinPublicKey(bytes: Uint8Array, networkId: NetworkId): string   // round-trip
+decodeUnshieldedAddress(bech32: string, networkId: NetworkId): Uint8Array
+encodeUnshieldedAddress(bytes: Uint8Array, networkId: NetworkId): string
+userEither(addrBytes: Uint8Array): Either<ContractAddress, UserAddress>
+  // { is_left: false, left: { bytes: zeros32 }, right: { bytes: addrBytes } }
+```
+
+Backed by `@midnight-ntwrk/wallet-sdk-address-format`. **Every HTLC deposit must go through `decodeShieldedCoinPublicKey` for `receiverAuth` and `decodeUnshieldedAddress` + `userEither` for `receiverPayout` / `senderPayout`.** The CLI learned this the hard way; the browser inherits the fix.
+
+## 9. Design system (MUI)
+
+**Theme** (`src/config/theme.ts`):
+
+- Dark mode; primary = `midnightGrey.500` (#808090 range).
+- Background = `#464655` (single flat tone — no elevation layering).
+- Typography = Helvetica, all-white; MUI defaults for sizes.
+- MUI 7, React 19, react-router 7.13.
+
+**Shared components** (reuse these, don't reinvent):
+
+- **`<AsyncButton onClick={asyncFn} pendingLabel="Working…" walletHint="Check your wallet…">`** — spinner + disable + hint. `walletHint` appears after `limits.walletPopupHintMs` (default 3 s).
+- **`<WalletGate require={{ midnight: true, cardano: false }} title="…" intro="…">`** — detects missing Lace / Eternl, surfaces install links, blocks children until wallets are connected. Use on every page whose main content requires a wallet.
+- **`<SwapStatusChip status="bob_deposited" />`** — unified vocabulary. Do not introduce new severities or labels for statuses without updating this component.
+- **`<ShareUrlCard url={…} />`** — QR (168 px, ECC level M via `qrcode.react`) + copy + `navigator.share`. Used by `AliceSwap` after locking.
+- **`<RecoveryBanner />`** (in `MainLayout`) — polls orchestrator every 20 s; if connected wallet has reclaimable swaps, shows a dismissable banner linking to `/reclaim`.
+- **Toast via `useToast()`** — `success(msg) / info(msg) / warning(msg) / error(msg)`. Single `<Snackbar>` + queue. Default durations: success/info 3.5 s, warning 6 s, error 8 s. Use for wallet errors, "copied to clipboard", network blips, orchestrator 5xx.
+
+**Runtime config (`src/config/limits.ts`):**
+
+```typescript
+aliceMinDeadlineMin     = VITE_ALICE_MIN_DEADLINE_MIN     ?? 3       // floor
+aliceDefaultDeadlineMin = VITE_ALICE_DEFAULT_DEADLINE_MIN ?? 120
+bobMinCardanoWindowSecs = VITE_BOB_MIN_CARDANO_WINDOW_SECS ?? 180
+bobSafetyBufferSecs     = VITE_BOB_SAFETY_BUFFER_SECS     ?? 60
+bobDeadlineMin          = VITE_BOB_DEADLINE_MIN           ?? 2
+bobMinDepositTtlSecs    = VITE_BOB_MIN_DEPOSIT_TTL_SECS   ?? 60
+browseMinRemainingSecs  = VITE_BROWSE_MIN_REMAINING_SECS  ?? 180
+walletPopupHintMs       = VITE_WALLET_POPUP_HINT_MS       ?? 3000
+```
+
+These are INTENTIONALLY short — a demo needs 2-minute expiries to be testable. For mainnet / real money, the frontend would read longer values. Override with `VITE_*` env vars; do **not** inline new hardcoded numbers in components.
+
+## 10. The orchestrator (advisory)
+
+`htlc-orchestrator/` is a Fastify + SQLite service that:
+
+1. **Indexes swaps** — Alice POSTs to `/api/swaps` right after locking. The UI lets Bob discover offers via `GET /api/swaps?status=open`, which is what `/browse` reads.
+2. **Fast-path events** — both role components poll the orchestrator in parallel with the Midnight indexer. Whichever sees the transition first wins. This cuts ~5 s off each wait step (orchestrator polls indexer every 5 s with a hot connection; in-browser indexer calls are cold).
+3. **Watchers maintain status** — `midnight-watcher.ts` transitions `open→bob_deposited` when deposit appears on-chain, `bob_deposited→alice_claimed` when preimage is revealed, `bob_deposited→bob_reclaimed` on refund. `cardano-watcher.ts` transitions `alice_claimed→completed` when lock UTxO is spent, and `open|bob_deposited→alice_reclaimed` on post-deadline spend.
+4. **Stuck-swap alerter** (opt-in) — posts to `STUCK_SWAP_WEBHOOK_URL` (auto-detects Slack vs Discord vs raw JSON) when reclaim is available or a claim has stalled > 15 min.
+
+**Authority model.** The orchestrator is a **view**. Contracts are authoritative. If the orchestrator is down, both `/alice` and `/bob` still work — they just fall back to the Midnight indexer (slower). If the orchestrator DB disagrees with chain state, chain state wins; `tryOrchestrator()` in `orchestrator-client.ts` swallows errors and logs them.
+
+**REST API:**
+```
+POST   /api/swaps            CreateSwapBody → Swap   (409 if hash exists)
+GET    /api/swaps?status=X   → { swaps: Swap[] }
+GET    /api/swaps/:hash      → Swap
+PATCH  /api/swaps/:hash      PatchSwapBody → Swap
+GET    /health               → { ok, db }
+```
+
+Input validation is regex-based (hash 64 hex chars, amounts non-negative bigint strings, status union). CORS allows `localhost:5199`, `localhost:5173`, `localhost:8080`.
+
+## 11. Known incidents and gotchas
+
+### Landmine #1: bech32m ↔ Bytes<32> — RESOLVED
+
+**Symptom (CLI, pre-fix):** Alice's `withdrawWithPreimage` always failed with `Only designated receiver can withdraw`.
+
+**Root cause:** Bob was passing a bech32m-encoded string or the wrong HD-role key as `receiverAuth`. The circuit compares against `ownPublicKey().bytes` which is raw 32 bytes derived from the Zswap shielded role.
+
+**Fix (browser):** `BrowserHtlcManager` always decodes via `decodeShieldedCoinPublicKey(bech32, networkId) → Uint8Array` and the decoded bytes are what gets passed to `deposit(..., receiverAuth, ...)`. Similarly for `receiverPayout` / `senderPayout`, which use `decodeUnshieldedAddress + userEither`.
+
+**What you must not do:**
+- Do not pass `connectedAPI.zswapCoinPublicKey` (a bech32m string) as `receiverAuth`.
+- Do not grab the old CLI `address.json.alice.midnight.coinPublicKey` field — that was the Night (unshielded) key mis-named as `coinPublicKey`.
+- Always source auth / payout from `BrowserHtlcManager` (decoded) or from `key-encoding.ts`.
+
+### Landmine #2: stale Cardano UTxOs at the shared script address
+
+The Cardano HTLC script address is shared across all swaps (it's just the validator's script hash). Preprod has accumulated ~6 stale UTxOs from prior test runs. `watchForCardanoLock` **must** filter by `(receiverPkh, hashHex, deadline > now)` — all three. No-filter watchers latch onto unrelated UTxOs and corrupt the swap.
+
+`BobSwap.tsx` already passes the hash it got from the URL, so this is handled. Do not "simplify" the watcher signature.
+
+### Landmine #3: ZK asset hosting
+
+`FetchZkConfigProvider` fetches `${origin}/keys/<circuit>.{prover,verifier}` and `${origin}/zkir/<circuit>.bzkir` over HTTP. The Vite dev server serves `public/` at root, so the `predev` hook in `htlc-ui/package.json` populates `public/keys/` + `public/zkir/` from `contract/src/managed/{htlc,usdc}/{keys,zkir}/` on every `npm run dev` or `npm run build`. Circuit names do not collide (HTLC: `deposit/withdrawWithPreimage/reclaimAfterExpiry`; USDC: `mint/name/symbol/decimals/color`) so a flat merge works.
+
+If you see `fetch /keys/…prover 404` in the console, the predev hook didn't run — do a clean `npm install && npm run dev` to retrigger.
+
+### Landmine #4: deadline-floor bug (fixed)
+
+Earlier BobSwap passed its Midnight deadline as `Math.floor(Date.now() / 1000) + bobDeadlineMin * 60`. If that was very tight against Alice's Cardano deadline, the safety-buffer truncation could pull the TTL to zero or negative. Fix: `limits.bobMinDepositTtlSecs` is a hard floor; if the post-truncation TTL is lower, BobSwap enters `unsafe-deadline` and aborts with a specific error message showing the seconds. Don't re-introduce a hardcoded minimum in the component.
+
+### Gotcha: Compact map semantics
+
+Midnight Compact maps have no delete. A completed swap is marked by `htlcAmounts[hash] = 0`. `state$` derivation code treats `0n` as "completed, don't surface to user as active offer"; treat it the same in any new UI code.
+
+### Gotcha: multiple Lace / Eternl APIs
+
+`window.cardano` can have 3-5 entries (Eternl, Nami, Lace-Cardano, etc.). `SwapContext.connectCardano(walletName?)` accepts an optional wallet name; default prefers `'eternl'` if present, else first available. If users install a new Cardano wallet post-connection, they need to disconnect+reconnect.
+
+### Gotcha: Blockfrost key is in the client bundle
+
+`VITE_BLOCKFROST_API_KEY` ships to every user. This is fine for a preprod demo (rate-limited key, no value at stake), **not fine for mainnet**. Migration path for production: proxy Blockfrost calls through a small backend that adds the header server-side.
+
+## 12. Not production-ready yet (your scope)
+
+These are the known gaps between "it works" and "a stranger would trust it with real money." Prioritize user-visible things first.
+
+### A. UX polish
+
+- **Empty states.** `/browse` with zero open offers just shows blank space. Needs a friendly "no open offers — tell a friend to start one" state with a link to `/alice`. Same for `/dashboard` and `/reclaim` when there's nothing to show.
+- **Loading skeletons.** Swap tables and state cards currently pop in. MUI `<Skeleton>` for the first render would be nicer.
+- **Error copy.** Most catch blocks surface raw `e.message`. A mapping layer ("user rejected in wallet" / "insufficient ADA" / "orchestrator offline, falling back to indexer") would help. Group errors by category and show a recovery suggestion.
+- **Success confirmation.** After a swap completes, the "done" state is a small card. Consider a celebration state with a share-to-social call-out — atomic-swap completions are rare and demo-able.
+- **Transaction links.** `Dashboard` already links to Midnight indexer + cardanoscan.io/preprod; make sure every tx-bearing card (Alice lock, Bob deposit, both claims, both reclaims) does the same.
+
+
+
+
+### D. Production deployment concerns
+
+- **Blockfrost key in client bundle** — documented above; proxy via backend for mainnet.
+- **Bundle size** — `@midnight-ntwrk/*` + `@lucid-evolution/lucid` + MUI + qrcode.react is heavy. `npm run build` has not been optimized (no route-level code splitting, no tree-shake audit).
+- **Orchestrator single-instance** — `better-sqlite3` with a local file. Fine for one box; horizontal scaling would need a real DB (Postgres) and a leader for the watchers (or move watchers to a separate worker).
+- **CORS origins** — orchestrator currently allows `localhost:{5199,5173,8080}`. Production domain has to be added to `server.ts`.
+- **USDC mint has no access control** — currently anyone connected can call `mint()`. The `/mint-usdc` page openly advertises this. For a real demo this is OK-and-labeled; for production you would wrap this in an auth-gated contract (or a backend that holds the mint key and rate-limits).
+- **Preimage in `localStorage`** — Alice's in-progress preimage is persisted so refresh doesn't lose it. Per-origin, not encrypted. A real app would encrypt with a wallet-derived key or use session storage + warn the user not to refresh.
+
+### E. Missing wallet affordances
+
+- No "disconnect wallet" flow for either chain beyond `SwapContext.disconnect*` (not wired to a UI button).
+- No wallet-balance live updates — balances poll every 30 s in Header, don't refresh after a tx. Subscribe to `walletProvider.balances$` if the SDK exposes it.
+- No wallet-switching UI — if the user changes account in Lace, the UI won't notice until reload.
+
+### F. Things to explicitly NOT change
+
+- **State machines** (`useReducer` in `AliceSwap`, `BobSwap`) — they mirror the CLI reference exactly. Refactoring for cleanliness will drop invariants. Add features by adding states, not by restructuring.
+- **`BrowserHtlcManager` wallet-polling + semver check** — this is the only way to coexist with Lace's version churn. Do not replace with a direct `window.midnight.x` grab.
+- **bech32m decoding pipeline in `key-encoding.ts`** — Landmine #1. Do not bypass for any reason.
+- **Safety checks in `BobSwap`** (`limits.bobMinCardanoWindowSecs`, `limits.bobSafetyBufferSecs`, `limits.bobMinDepositTtlSecs`) — these protect Bob from a "lowballed deadline" race. Tune via `VITE_*` env vars, don't remove the checks.
+- **Orchestrator-as-advisory model** — keep chain state authoritative. Never gate a user action on orchestrator response; always `tryOrchestrator()` + fall back to indexer.
+- **The contract split** — htlc + usdc are separate on purpose. Don't join them.
+
+## 13. Running it
+
+### Prereqs
+
+- Cardano Preprod Blockfrost key in `htlc-ui/.env.preprod` as `VITE_BLOCKFROST_API_KEY=…`.
+- Midnight local proof server at `127.0.0.1:6300` (`docker run …` — see Midnight docs).
+- Midnight preprod endpoints reachable (no VPN / corp firewall issues).
+- Lace (Midnight) + Eternl (Cardano) browser extensions installed.
+- Both wallets funded: Midnight via https://faucet.preprod.midnight.network/ (dust auto-generates, ~15 min sync first time); Cardano via preprod faucet.
+
+### First-time setup
 
 ```bash
-cd htlc-ft-cli
+# 1. Compile contracts + build workspace packages
+cd contract
+npm run compact:htlc
+npm run compact:usdc
+npm run build:all
 
-# Setup (once — deploys both contracts to preprod, mints USDC)
+# 2. Deploy both contracts + mint seed USDC + write swap-state.json
+cd ../htlc-ft-cli
 MIDNIGHT_NETWORK=preprod npx tsx src/setup-contract.ts
 
-# Terminal 1 — Alice (runs first, writes pending-swap.json after Cardano lock)
-MIDNIGHT_NETWORK=preprod ALICE_ACCEPT_ALL=1 ALICE_ADA=1 ALICE_USDC=1 ALICE_DEADLINE_MIN=120 \
-  npx tsx src/alice-swap.ts
+# 3. Copy the fresh swap-state.json into the UI
+cp swap-state.json ../htlc-ui/swap-state.json
 
-# Terminal 2 — Bob (only after Alice's "Published hash to pending-swap.json")
-MIDNIGHT_NETWORK=preprod BOB_ACCEPT_ALL=1 \
-  npx tsx src/bob-swap.ts
+# 4. Start the orchestrator (optional but recommended — enables /browse + fast-path)
+cd ../htlc-orchestrator
+npm install
+SWAP_STATE_PATH=../htlc-ft-cli/swap-state.json \
+  BLOCKFROST_API_KEY=$BLOCKFROST_API_KEY \
+  npm run dev         # default port 4000
+
+# 5. Start the UI
+cd ../htlc-ui
+npm install
+npm run dev           # default port 5173
 ```
 
-### Recovery
+### Two-browser end-to-end
+
+- Browser A (Alice): navigate to `http://localhost:5173/alice`, connect Lace + Eternl, fill amounts, lock ADA, copy share URL.
+- Browser B (Bob): navigate to the share URL (or `http://localhost:5173/bob` if you want to paste the URL on the page), connect wallets, accept, deposit USDC.
+- Browser A (Alice): "Claim USDC" button lights up within ~5 s, click, sign.
+- Browser B (Bob): "Claim ADA" button lights up, click, sign.
+- Both wallets reflect the swap.
+
+### CLI regression (sanity check)
 
 ```bash
-# Bob recovers trapped USDC after his Midnight deadline:
-MIDNIGHT_NETWORK=preprod npx tsx src/reclaim-usdc.ts          # uses pending-swap.json
-MIDNIGHT_NETWORK=preprod npx tsx src/reclaim-usdc.ts --hash <hex>
-
-# Alice recovers ADA after her Cardano deadline:
-npx tsx src/reclaim-ada.ts                                    # uses pending-swap.json
-npx tsx src/reclaim-ada.ts --hash <hex>
+cd htlc-ft-cli
+npx tsx src/execute-swap.ts          # single-process regression
+npx tsx src/smoke-native.ts          # Midnight-only smoke (deposit + reclaim)
+npx tsx src/smoke-cardano-reclaim.ts # Cardano-only smoke (lock + reclaim)
 ```
 
-Bob's watcher requires `pending-swap.json` (written by Alice after her lock) OR a `--hash` CLI arg / `SWAP_HASH` env var. Without one, it falls back to "first fresh lock for Bob" which is unsafe when the script address holds concurrent UTXOs from other swaps.
+Two-terminal on preprod: `MIDNIGHT_NETWORK=preprod npx tsx src/alice-swap.ts` in one terminal, then `MIDNIGHT_NETWORK=preprod npx tsx src/bob-swap.ts` in the other AFTER Alice logs "Published hash to pending-swap.json".
+
+## 14. Key files to read first (for the frontend-designer session)
+
+In order of "stop and read this before you change anything":
+
+1. `htlc-ui/src/contexts/BrowserHtlcManager.ts` — how wallets + contracts are wired.
+2. `htlc-ui/src/contexts/SwapContext.tsx` — the React-visible surface.
+3. `htlc-ui/src/components/AliceSwap.tsx` — Alice state machine (copy patterns from here, don't refactor).
+4. `htlc-ui/src/components/BobSwap.tsx` — Bob state machine + safety checks.
+5. `htlc-ui/src/api/key-encoding.ts` — bech32m → Bytes<32> (Landmine #1 fix).
+6. `htlc-ui/src/api/htlc-api.ts` + `usdc-api.ts` — contract wrappers.
+7. `htlc-ui/src/config/theme.ts` + `limits.ts` — design system + runtime safety windows.
+8. `htlc-ui/src/components/{Layout/Header,MainLayout,Landing,WalletConnect,WalletGate,AsyncButton,SwapStatusChip,RecoveryBanner,ShareUrlCard}.tsx` — shared UI vocabulary.
+9. `htlc-orchestrator/src/routes/swaps.ts` — REST surface the UI depends on.
+10. `htlc-ft-cli/src/{alice-swap,bob-swap}.ts` — behavioral spec (CLI) if any state-machine question is ambiguous.
 
 ---
 
-## Frontend Integration Roadmap
+## Appendix: environment variables
 
-The CLI flow is the behavioural specification. The frontend needs to reproduce the same state machines — Alice-role and Bob-role — inside a browser, driven by user clicks and by a Midnight wallet connector (Lace) plus a Cardano wallet connector (Eternl / Nami / Lace-Cardano). The legacy Bulletin Board UI at `bboard-ui/` provides the Midnight half of the plumbing as a template.
+### `htlc-ui/.env.preprod`
 
-### What to reuse from the legacy bboard stack
+```bash
+VITE_NETWORK_ID=preprod
+VITE_LOGGING_LEVEL=trace
+VITE_PROOF_SERVER_URI=http://127.0.0.1:6300
+VITE_BLOCKFROST_API_KEY=preprod…                # in-bundle — demo only
+VITE_ORCHESTRATOR_URL=http://localhost:4000     # advisory; UI works without it
 
-| Artefact | Purpose | Re-use strategy |
-|---|---|---|
-| `bboard-ui/src/contexts/BrowserDeployedBoardManager.ts` | Browser wallet bootstrap, `ConnectedAPI` from `@midnight-ntwrk/dapp-connector-api`, semver handshake, `FetchZkConfigProvider`, `httpClientProofProvider`, `indexerPublicDataProvider` | Copy the top of the file (wallet connect + provider wiring) verbatim; swap the contract-specific bits for HTLC + USDC. This is the hardest-to-rederive code; take it. |
-| `bboard-ui/src/contexts/DeployedBoardContext.tsx` + `hooks/useDeployedBoardContext.ts` | React context pattern for deployed contracts | Mirror the shape: one context per role (or one combined swap context), observable state, subscribe from components. |
-| `bboard-ui/src/App.tsx`, `main.tsx`, `config/theme.ts`, `components/Layout/` | MUI + react-router-dom scaffolding | Keep wholesale; replace routes + components. |
-| `api/src/index.ts` — `BBoardAPI` | Wraps a `findDeployedContract` + exposes `state$: Observable<...>` + action methods | Mirror shape for `HtlcAPI` and `UsdcAPI`; each exposes `state$` (decoded `htlcLedger` / `usdcLedger`) + action methods (`deposit`, `withdrawWithPreimage`, `reclaimAfterExpiry`, `mint`). |
-| `api/src/common-types.ts` | Branded private-state keys, `PrivateStates` schema | Replace bboard types with `HTLCPrivateStateId` + `EmptyPrivateState` (already defined in `contract/src/htlc-contract.ts`). |
+# Optional safety window overrides (defaults in src/config/limits.ts)
+# VITE_ALICE_MIN_DEADLINE_MIN=3
+# VITE_ALICE_DEFAULT_DEADLINE_MIN=120
+# VITE_BOB_MIN_CARDANO_WINDOW_SECS=180
+# VITE_BOB_SAFETY_BUFFER_SECS=60
+# VITE_BOB_DEADLINE_MIN=2
+# VITE_BOB_MIN_DEPOSIT_TTL_SECS=60
+# VITE_BROWSE_MIN_REMAINING_SECS=180
+# VITE_WALLET_POPUP_HINT_MS=3000
+```
 
-### What needs to change vs. the CLI
+### `htlc-orchestrator` env
 
-| CLI concern | Frontend replacement |
-|---|---|
-| `MidnightWalletProvider` (seed-based, `FluentWalletBuilder.withSeed`) | `ConnectedAPI` from `@midnight-ntwrk/dapp-connector-api` — user connects Lace, you get a `walletProvider` + `midnightProvider` + `zswapCoinPublicKey` without ever touching a seed. |
-| `generateDust(logger, seed, ...)` | Dust is managed by Lace — no action needed. Drop the call. |
-| `waitForUnshieldedFunds` sync-loop | Lace reports balances; surface them in the UI, don't spin. |
-| `NodeZkConfigProvider` | `FetchZkConfigProvider` — fetches ZK keys from the webserver at `/keys` and `/zkir` (see `bboard-ui` build script which copies `contract/src/managed/{bboard}/keys` + `zkir` into `dist/`). Do the same for `htlc` + `usdc`. |
-| `pending-swap.json` file coordination | Not needed in a single-user UI that drives both roles. In a multi-user UI, hash + Alice's coinPublicKey flow over a backchannel (URL param, relay server, QR code). |
-| `alice-swap.ts` / `bob-swap.ts` CLI prompts | React form + state-machine component per role, identical logic otherwise. |
-| `address.json` seeds / mnemonics | User-provided wallets. Still need a Cardano wallet connector — Lucid Evolution has a `selectWallet.fromAPI(cardanoWalletApi)` that wraps CIP-30 providers (Eternl, Nami, Lace-Cardano); swap it in for `selectWalletFromSeed`. |
-| `BLOCKFROST_API_KEY` in `.env` | Browser-safe alternative: proxy Blockfrost through a small backend, or ship a rate-limited public key (fine for a demo on preprod). **Never embed a production key in client bundles.** |
+```bash
+PORT=4000
+DATABASE_PATH=./data/swaps.db                   # better-sqlite3 file (WAL)
+SWAP_STATE_PATH=../htlc-ft-cli/swap-state.json  # how the watcher finds contract addresses
+BLOCKFROST_API_KEY=…                            # server-side; NOT shipped to clients
+MIDNIGHT_NETWORK=preprod
 
-### Suggested build path for the UI
+# Optional stuck-swap alerter
+STUCK_SWAP_WEBHOOK_URL=…                        # Slack / Discord / raw JSON (auto-detected)
+STUCK_SWAP_SCAN_INTERVAL_MS=60000
+STUCK_SWAP_ALICE_CLAIMED_STALE_MS=900000        # 15 min
+STUCK_SWAP_REALERT_MS=21600000                  # 6 h
+STUCK_SWAP_PUBLIC_UI_URL=https://…              # deep-link into /reclaim in alerts
+```
 
-1. **Scaffold.** `cp -r bboard-ui htlc-ui && cd htlc-ui`. Rename package. Point `tsconfig`/`vite.config` at `../contract/src/managed/{htlc,usdc}` instead of `{bboard}`. Copy the `keys/` + `zkir/` copy step in the `build` script for both contracts.
-2. **Wallet wire-up.** Adapt `BrowserDeployedBoardManager.ts` → `BrowserHtlcManager.ts`. Keep the semver check, the `ConnectedAPI` acquisition, the provider bundle. Expose `aliceCoinPublicKey = connectedAPI.zswapCoinPublicKey` — that's the fix for Incident #1 baked into the UI from day one.
-3. **Contract API.** Write `api/src/htlc.ts` and `api/src/usdc.ts` mirroring `BBoardAPI`: each wraps a `FoundContract`, exposes `state$`, exposes `deposit / withdrawWithPreimage / reclaimAfterExpiry / mint` methods. Port the read+decode helpers from `midnight-watcher.ts` (`watchForHTLCDeposit`, `watchForPreimageReveal`) into `state$` observables.
-4. **Cardano wallet.** Add a `CardanoHTLC.withCIP30(walletApi)` factory in `htlc-ft-cli/src/cardano-htlc.ts` (or a UI-side wrapper) that uses Lucid Evolution's `lucid.selectWallet.fromAPI(walletApi)`. Behavior is identical to `selectWalletFromSeed`; just a different key source.
-5. **Role components.** One React route/component per role:
-   - `<AliceSwap/>` — form for ADA amount / deadline; click **Lock ADA** → Cardano sign; shows "waiting for Bob"; click **Claim USDC** (enabled when indexer reports the matching deposit) → Midnight sign.
-   - `<BobSwap/>` — form for USDC amount; auto-fills hash + Alice coinPublicKey from URL param or clipboard; click **Deposit USDC** → Midnight sign; shows "waiting for Alice to reveal"; click **Claim ADA** (enabled when preimage appears in `revealedPreimages`) → Cardano sign.
-   - `<Reclaim/>` — two-button panel: Alice reclaim ADA (post-deadline), Bob reclaim USDC (post-deadline).
-6. **Observables.** Use RxJS (already in `bboard-ui` deps) to drive enable/disable state. Key observables:
-   - `htlcLedger$` — poll `queryContractState` every ~5s (or subscribe to `contractStateObservable()`).
-   - `cardanoLocks$` — poll Blockfrost for UTxOs at the script address, filtered by hash.
-7. **Safety gates.** Port the `MIN_CARDANO_DEADLINE_WINDOW_SECS` / `SAFETY_BUFFER_SECS` checks from `bob-swap.ts:240-275` straight into the UI — surface them as inline validation on the Bob form.
+### `htlc-ft-cli/.env`
 
-### Open questions for the UI Claude session
+```bash
+BLOCKFROST_API_KEY=…                            # CLI uses this for Lucid Blockfrost provider
+```
 
-1. **Hash coordination.** If the UI assumes one user operates both roles (testing), do we still need a backchannel? If it's two users, what's the UX — URL param? QR code? A lightweight websocket relay?
-2. **Cardano wallet flavour.** Lace-Cardano, Eternl, Nami — pick one and test its CIP-30 compatibility with Lucid Evolution first.
-3. **ZK key hosting.** The `dist/keys` + `dist/zkir` copies assume same-origin hosting. If deployed to Vercel/Netlify, confirm CORS + Cache-Control headers for the blobs (they're ~MB each).
-4. **Proof server.** `bboard-ui` probably uses a hosted proof server on preprod; confirm the URL the connected wallet exposes (it should ride along with `ConnectedAPI`) and whether the UI has to configure it.
-5. **Dust UX.** On preprod, dust sync takes ~15 min after a first Night faucet. Lace handles this automatically, but show a "syncing dust" state so users don't think the app hung.
+### Network switch (CLI only)
+
+```bash
+MIDNIGHT_NETWORK=preprod      # or: undeployed (local dev)
+```
