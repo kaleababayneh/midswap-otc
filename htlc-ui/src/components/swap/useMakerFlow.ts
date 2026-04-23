@@ -410,7 +410,7 @@ export const useMakerFlow = (): UseMakerFlow => {
             `HTLC has already expired on Midnight (${Math.abs(remaining)}s ago). The counterparty can reclaim their USDC; ask them to redeposit with a fresher deadline.`,
           );
         }
-        if (remaining < 20) {
+        if (remaining < 60) {
           throw new Error(
             `HTLC deadline too close to safely submit (${remaining}s left). Submitting now risks a post-deadline rejection — ask the counterparty to redeposit with a fresher deadline.`,
           );

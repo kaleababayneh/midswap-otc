@@ -262,10 +262,10 @@ export class CardanoHTLCBrowser {
     // literally no window left — a better error than a node reject.
     const nowMs = Date.now();
     const deadlineMs = Number(datum.deadline);
-    const safetyGapMs = 10_000; // breathing room before the deadline
-    const minPropagationMs = 15_000; // minimum slack ahead of now for tx relay
+    const safetyGapMs = 30_000; // breathing room before the deadline
+    const minPropagationMs = 60_000; // minimum slack ahead of now for tx relay
     const validToMs = deadlineMs - safetyGapMs;
-    if (validToMs <= nowMs + 5_000) {
+    if (validToMs <= nowMs + 10_000) {
       throw new Error(
         `Cardano deadline ${Math.max(0, Math.ceil((deadlineMs - nowMs) / 1000))}s away — too close to safely submit a claim tx. Consider reclaim instead.`,
       );

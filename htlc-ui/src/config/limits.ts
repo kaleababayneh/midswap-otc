@@ -28,10 +28,18 @@ export const limits = {
    * down to `aliceMinDeadlineMin`.
    */
   aliceDefaultDeadlineMin: num('VITE_ALICE_DEFAULT_DEADLINE_MIN', 240),
-  /** Minimum time remaining on Alice's Cardano lock before Bob will accept. */
-  bobMinCardanoWindowSecs: num('VITE_BOB_MIN_CARDANO_WINDOW_SECS', 180),
-  /** Seconds of safety buffer Bob leaves inside Alice's Cardano deadline. */
-  bobSafetyBufferSecs: num('VITE_BOB_SAFETY_BUFFER_SECS', 60),
+  /**
+   * Minimum time remaining on the maker's outer lock before the taker will
+   * accept an offer. Protects the taker from locking into a swap that expires
+   * before they can realistically claim. 10 min floor.
+   */
+  bobMinCardanoWindowSecs: num('VITE_BOB_MIN_CARDANO_WINDOW_SECS', 600),
+  /**
+   * Gap the taker leaves between their inner deadline and the maker's outer
+   * deadline. Ensures the maker still has time to claim after the taker's
+   * deadline passes without the swap having settled. 5 min buffer.
+   */
+  bobSafetyBufferSecs: num('VITE_BOB_SAFETY_BUFFER_SECS', 300),
   /**
    * Minutes Bob's Midnight deadline lasts from the moment he deposits.
    *
@@ -47,8 +55,12 @@ export const limits = {
    * 2 hours is sufficient in practice.
    */
   reverseTakerDeadlineMin: num('VITE_REVERSE_TAKER_DEADLINE_MIN', 120),
-  /** Absolute floor (seconds) for Bob's deposit TTL after safety-buffer truncation. */
-  bobMinDepositTtlSecs: num('VITE_BOB_MIN_DEPOSIT_TTL_SECS', 60),
+  /**
+   * Absolute floor (seconds) for the taker's own deadline after the
+   * safety-buffer truncation. If the computed TTL falls below this the taker
+   * aborts rather than locking into a near-hopeless window. 10 min floor.
+   */
+  bobMinDepositTtlSecs: num('VITE_BOB_MIN_DEPOSIT_TTL_SECS', 600),
   /** Browse hides offers whose deadline is within this many seconds. */
   browseMinRemainingSecs: num('VITE_BROWSE_MIN_REMAINING_SECS', 300),
   /** Ms after the user clicks a signing button before we show "check your wallet". */
