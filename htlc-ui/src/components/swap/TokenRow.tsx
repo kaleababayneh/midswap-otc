@@ -80,10 +80,7 @@ export const TokenRow: React.FC<Props> = ({ label, value, onChange, token, helpe
           <TokenBadge token={token} size={24} />
           <Stack sx={{ lineHeight: 1 }}>
             <Typography sx={{ fontSize: '0.95rem', fontWeight: 600, letterSpacing: 0 }}>{token.symbol}</Typography>
-            <Typography
-              variant="caption"
-              sx={{ fontSize: '0.68rem', color: theme.custom.textMuted, lineHeight: 1 }}
-            >
+            <Typography variant="caption" sx={{ fontSize: '0.68rem', color: theme.custom.textMuted, lineHeight: 1 }}>
               on {token.chain}
             </Typography>
           </Stack>

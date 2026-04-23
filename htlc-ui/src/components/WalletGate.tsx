@@ -57,21 +57,14 @@ export const WalletGate: React.FC<Props> = ({ require, title, intro, children })
       >
         <Typography sx={{ fontWeight: 600, mb: 0.5 }}>Connect your wallets</Typography>
         <Typography variant="body2" sx={{ color: theme.custom.textSecondary, mb: 2 }}>
-          This page needs{' '}
-          {needsMidnight && 'a Midnight wallet (Lace)'}
+          This page needs {needsMidnight && 'a Midnight wallet (Lace)'}
           {needsMidnight && needsCardano && ' and '}
           {needsCardano && 'a Cardano CIP-30 wallet (Eternl recommended)'} to continue.
         </Typography>
 
         <Stack spacing={1.5}>
           {needsMidnight && (
-            <Button
-              variant="contained"
-              color="primary"
-              onClick={() => void connect()}
-              disabled={connecting}
-              fullWidth
-            >
+            <Button variant="contained" color="primary" onClick={() => void connect()} disabled={connecting} fullWidth>
               {connecting ? 'Connecting to Midnight…' : 'Connect Midnight wallet'}
             </Button>
           )}

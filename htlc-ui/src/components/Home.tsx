@@ -53,8 +53,8 @@ export const Home: React.FC = () => {
           </Box>
         </Typography>
         <Typography sx={{ color: theme.custom.textSecondary, fontSize: '1.05rem' }}>
-          Hash-time-locked escrow on both chains — no custodian, no bridge, no trust.
-          Either both sides settle, or both sides reclaim.
+          Hash-time-locked escrow on both chains — no custodian, no bridge, no trust. Either both sides settle, or both
+          sides reclaim.
         </Typography>
       </Stack>
 

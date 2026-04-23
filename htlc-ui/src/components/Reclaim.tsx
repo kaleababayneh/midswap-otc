@@ -389,7 +389,9 @@ export const Reclaim: React.FC = () => {
             title="Cardano HTLC — refund ADA"
             onInspect={() => void manualInspectAda()}
             onReclaim={() => void manualReclaimAda()}
-            disabledInspect={!cardano || !hashValid || adaStatus.kind === 'inspecting' || adaStatus.kind === 'reclaiming'}
+            disabledInspect={
+              !cardano || !hashValid || adaStatus.kind === 'inspecting' || adaStatus.kind === 'reclaiming'
+            }
             body={
               <>
                 {adaStatus.kind === 'inspecting' && <InlineBusy label="Querying Blockfrost…" />}
@@ -426,7 +428,9 @@ export const Reclaim: React.FC = () => {
             title="Midnight HTLC — refund USDC"
             onInspect={() => void manualInspectUsdc()}
             onReclaim={() => void manualReclaimUsdc()}
-            disabledInspect={!session || !hashValid || usdcStatus.kind === 'inspecting' || usdcStatus.kind === 'reclaiming'}
+            disabledInspect={
+              !session || !hashValid || usdcStatus.kind === 'inspecting' || usdcStatus.kind === 'reclaiming'
+            }
             body={
               <>
                 {usdcStatus.kind === 'inspecting' && <InlineBusy label="Reading contract state…" />}
@@ -448,7 +452,9 @@ export const Reclaim: React.FC = () => {
                     )}
                   </Stack>
                 )}
-                {usdcStatus.kind === 'reclaiming' && <InlineBusy label="Submitting reclaim. Sign in Midnight wallet." />}
+                {usdcStatus.kind === 'reclaiming' && (
+                  <InlineBusy label="Submitting reclaim. Sign in Midnight wallet." />
+                )}
                 {usdcStatus.kind === 'done' && (
                   <Alert severity="success">Reclaimed {usdcStatus.amount.toString()} USDC.</Alert>
                 )}
@@ -505,7 +511,7 @@ const ReclaimRow: React.FC<{
   disabledReason?: string;
 }> = ({ swap, rowStatus, side, onReclaim, disabled, disabledReason }) => {
   const theme = useTheme();
-  const deadlineMs = side === 'ada' ? swap.cardanoDeadlineMs : swap.midnightDeadlineMs ?? 0;
+  const deadlineMs = side === 'ada' ? swap.cardanoDeadlineMs : (swap.midnightDeadlineMs ?? 0);
 
   return (
     <Box
@@ -544,7 +550,7 @@ const ReclaimRow: React.FC<{
               {rowStatus.message}
             </Typography>
           ) : (
-            <Tooltip title={disabled ? disabledReason ?? '' : ''}>
+            <Tooltip title={disabled ? (disabledReason ?? '') : ''}>
               <span>
                 <Button
                   variant="contained"

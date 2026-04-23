@@ -89,35 +89,36 @@ export const SwapCard: React.FC = () => {
   const [counterpartyInput, setCounterpartyInput] = useState('');
   const resolvedCounterpartyPkh = useMemo(() => resolvePkh(counterpartyInput), [counterpartyInput]);
 
-  // Maker flow hook.
+  // Maker flow hook — open the modal when a swap becomes active, but key off
+  // `maker.state.kind` only so clicking "Hide" actually hides (and stays hidden
+  // until the next state transition).
   const maker = useMakerFlow();
   useEffect(() => {
-    if (maker.state.kind !== 'idle' && maker.state.kind !== 'error' && !modalOpen) {
+    if (maker.state.kind !== 'idle' && maker.state.kind !== 'error') {
       setModalOpen(true);
     }
-  }, [maker.state.kind, modalOpen]);
+  }, [maker.state.kind]);
 
   // Taker flow hook — hydrate from URL.
   const taker = useTakerFlow();
   const urlParsed = useMemo(() => parseUrlInputs(searchParams), [searchParams]);
-  const urlOk = !('error' in urlParsed);
+  const urlInputs = 'error' in urlParsed ? undefined : urlParsed;
   const urlError = 'error' in urlParsed ? urlParsed.error : undefined;
 
   // When in taker mode with a valid URL + session + cardano, auto-start the
   // watcher the way BobSwap did previously.
   useEffect(() => {
     if (direction !== 'taker') return;
-    if (!urlOk) return;
+    if (!urlInputs) return;
     if (taker.state.kind !== 'idle') return;
     if (!session || !cardano) return;
-    taker.start(urlParsed as Exclude<typeof urlParsed, { error: string }>);
+    taker.start(urlInputs);
     setModalOpen(true);
-  }, [direction, urlOk, urlParsed, session, cardano, taker]);
+  }, [direction, urlInputs, session, cardano, taker]);
 
   // Amounts shown in taker mode come from the URL.
-  const takerPayValue = urlOk && direction === 'taker' ? (urlParsed as { usdcAmount: bigint }).usdcAmount.toString() : '';
-  const takerReceiveValue =
-    urlOk && direction === 'taker' ? (urlParsed as { adaAmount: bigint }).adaAmount.toString() : '';
+  const takerPayValue = urlInputs && direction === 'taker' ? urlInputs.usdcAmount.toString() : '';
+  const takerReceiveValue = urlInputs && direction === 'taker' ? urlInputs.adaAmount.toString() : '';
 
   // ----------------------------------------------------------------------------
   // Primary CTA computation.
@@ -125,7 +126,10 @@ export const SwapCard: React.FC = () => {
 
   const onConnectBoth = useCallback(async () => {
     try {
-      await Promise.all([session ? undefined : connect(), cardano ? undefined : connectCardano()]);
+      const pending: Promise<unknown>[] = [];
+      if (!session) pending.push(connect());
+      if (!cardano) pending.push(connectCardano());
+      await Promise.all(pending);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     }
@@ -159,7 +163,7 @@ export const SwapCard: React.FC = () => {
     // Flipping away from maker means "I have USDC and want ADA" — which in our
     // protocol means taking an existing offer. Send the user to /browse.
     if (direction === 'maker') {
-      navigate('/browse');
+      void navigate('/browse');
       return;
     }
     // If in taker mode, flipping back clears the URL and returns to maker.
@@ -182,7 +186,7 @@ export const SwapCard: React.FC = () => {
   // ----------------------------------------------------------------------------
 
   let cta: React.ReactNode;
-  if (direction === 'taker' && !urlOk) {
+  if (direction === 'taker' && !urlInputs) {
     cta = (
       <Stack spacing={1}>
         <Alert severity="warning">{urlError}</Alert>
@@ -204,7 +208,11 @@ export const SwapCard: React.FC = () => {
         onClick={onConnectBoth}
         pendingLabel={connecting || cardanoConnecting ? 'Opening wallets…' : 'Working…'}
       >
-        {!session && !cardano ? 'Connect Midnight + Cardano' : !session ? 'Connect Midnight wallet' : 'Connect Cardano wallet'}
+        {!session && !cardano
+          ? 'Connect Midnight + Cardano'
+          : !session
+            ? 'Connect Midnight wallet'
+            : 'Connect Cardano wallet'}
       </AsyncButton>
     );
   } else if (direction === 'maker') {
@@ -226,7 +234,14 @@ export const SwapCard: React.FC = () => {
       );
     } else {
       cta = (
-        <AsyncButton variant="contained" color="primary" size="large" fullWidth onClick={onLockClick} pendingLabel="Signing in wallet…">
+        <AsyncButton
+          variant="contained"
+          color="primary"
+          size="large"
+          fullWidth
+          onClick={onLockClick}
+          pendingLabel="Signing in wallet…"
+        >
           Review & lock {ada} ADA
         </AsyncButton>
       );
@@ -355,7 +370,7 @@ export const SwapCard: React.FC = () => {
         )}
 
         {/* Taker summary */}
-        {direction === 'taker' && urlOk && (
+        {direction === 'taker' && urlInputs && (
           <Box
             sx={{
               mt: 2,
@@ -367,14 +382,8 @@ export const SwapCard: React.FC = () => {
           >
             <Stack spacing={0.5}>
               <Typography sx={{ fontWeight: 600, color: theme.custom.textPrimary }}>Offer details</Typography>
-              <Row
-                k="Hash"
-                v={(urlParsed as { hashHex: string }).hashHex.slice(0, 32) + '…'}
-              />
-              <Row
-                k="Cardano deadline"
-                v={new Date(Number((urlParsed as { cardanoDeadlineMs: bigint }).cardanoDeadlineMs)).toLocaleString()}
-              />
+              <Row k="Hash" v={urlInputs.hashHex.slice(0, 32) + '…'} />
+              <Row k="Cardano deadline" v={new Date(Number(urlInputs.cardanoDeadlineMs)).toLocaleString()} />
             </Stack>
           </Box>
         )}
@@ -416,11 +425,17 @@ export const SwapCard: React.FC = () => {
           <Typography variant="caption" sx={{ color: 'inherit' }}>
             Need USDC?
           </Typography>
-          <Link component="button" underline="hover" onClick={() => navigate('/mint')}
-            sx={{ fontWeight: 500, fontSize: 'inherit' }}>
+          <Link
+            component="button"
+            underline="hover"
+            onClick={() => navigate('/mint')}
+            sx={{ fontWeight: 500, fontSize: 'inherit' }}
+          >
             Mint on Midnight
           </Link>
-          <Typography variant="caption" sx={{ color: 'inherit' }}>·</Typography>
+          <Typography variant="caption" sx={{ color: 'inherit' }}>
+            ·
+          </Typography>
           <Link
             component="button"
             underline="hover"

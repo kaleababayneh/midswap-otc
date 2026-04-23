@@ -151,8 +151,7 @@ const options: ThemeOptions = {
           backgroundRepeat: 'no-repeat',
         },
         'code, kbd, pre, samp': {
-          fontFamily:
-            "'JetBrains Mono', 'SF Mono', ui-monospace, Menlo, Consolas, 'Liberation Mono', monospace",
+          fontFamily: "'JetBrains Mono', 'SF Mono', ui-monospace, Menlo, Consolas, 'Liberation Mono', monospace",
         },
         '*::selection': {
           background: alpha(cardanoBlue, 0.35),

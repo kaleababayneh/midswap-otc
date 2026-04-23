@@ -101,16 +101,12 @@ const buildMakerPhases = (
   } else if (hasLockInfo) {
     lockSubtitle = (
       <Stack spacing={0.25}>
-        <Typography variant="caption">
-          Locked until {new Date(Number(state.deadlineMs)).toLocaleString()}
-        </Typography>
+        <Typography variant="caption">Locked until {new Date(Number(state.deadlineMs)).toLocaleString()}</Typography>
         <Typography variant="caption">Lock tx: {txLink('cardano', state.lockTxHash)}</Typography>
       </Stack>
     );
   } else if (state.kind === 'done') {
-    lockSubtitle = (
-      <Typography variant="caption">Lock tx: {txLink('cardano', state.lockTxHash)}</Typography>
-    );
+    lockSubtitle = <Typography variant="caption">Lock tx: {txLink('cardano', state.lockTxHash)}</Typography>;
   }
 
   return [
@@ -118,23 +114,20 @@ const buildMakerPhases = (
       id: 'lock',
       title: 'Lock ADA on Cardano',
       subtitle: lockSubtitle,
-      status:
-        state.kind === 'locking'
-          ? 'active'
-          : afterLock
-            ? 'done'
-            : state.kind === 'error'
-              ? 'error'
-              : 'pending',
+      status: state.kind === 'locking' ? 'active' : afterLock ? 'done' : state.kind === 'error' ? 'error' : 'pending',
     },
     {
       id: 'share',
       title: 'Share the offer',
-      subtitle: afterLock && shareUrl
-        ? 'The counterparty opens this URL (or scans the QR) to accept. Once they deposit, this step is done.'
-        : 'Waiting for lock confirmation…',
+      subtitle:
+        afterLock && shareUrl
+          ? 'The counterparty opens this URL (or scans the QR) to accept. Once they deposit, this step is done.'
+          : 'Waiting for lock confirmation…',
       status: afterDeposit ? 'done' : afterLock && shareUrl ? 'active' : 'pending',
-      action: afterLock && shareUrl && !afterDeposit ? <ShareUrlCard shareUrl={shareUrl} title="Share the offer URL" /> : undefined,
+      action:
+        afterLock && shareUrl && !afterDeposit ? (
+          <ShareUrlCard shareUrl={shareUrl} title="Share the offer URL" />
+        ) : undefined,
     },
     {
       id: 'claim',
@@ -144,14 +137,7 @@ const buildMakerPhases = (
         : afterDeposit
           ? 'Counterparty deposited — you can claim now. Claiming reveals the preimage so they can finish on Cardano.'
           : 'Waits for the counterparty deposit to appear on Midnight.',
-      status:
-        state.kind === 'claiming'
-          ? 'active'
-          : afterClaim
-            ? 'done'
-            : afterDeposit
-              ? 'active'
-              : 'pending',
+      status: state.kind === 'claiming' ? 'active' : afterClaim ? 'done' : afterDeposit ? 'active' : 'pending',
       action:
         state.kind === 'claim-ready' ? (
           <AsyncButton variant="contained" color="primary" size="large" onClick={onClaim} pendingLabel="Signing…">
@@ -162,11 +148,24 @@ const buildMakerPhases = (
   ];
 };
 
-const buildTakerPhases = (state: TakerStep, onAccept: () => void, onClaim: () => void | Promise<void>, usdcColor: string): PhaseRow[] => {
-  const afterWatch = state.kind === 'confirm' || state.kind === 'depositing' || state.kind === 'waiting-preimage' ||
-    state.kind === 'claim-ready' || state.kind === 'claiming' || state.kind === 'done';
-  const afterDeposit = state.kind === 'waiting-preimage' || state.kind === 'claim-ready' ||
-    state.kind === 'claiming' || state.kind === 'done';
+const buildTakerPhases = (
+  state: TakerStep,
+  onAccept: () => void,
+  onClaim: () => void | Promise<void>,
+  usdcColor: string,
+): PhaseRow[] => {
+  const afterWatch =
+    state.kind === 'confirm' ||
+    state.kind === 'depositing' ||
+    state.kind === 'waiting-preimage' ||
+    state.kind === 'claim-ready' ||
+    state.kind === 'claiming' ||
+    state.kind === 'done';
+  const afterDeposit =
+    state.kind === 'waiting-preimage' ||
+    state.kind === 'claim-ready' ||
+    state.kind === 'claiming' ||
+    state.kind === 'done';
   const afterPreimage = state.kind === 'claim-ready' || state.kind === 'claiming' || state.kind === 'done';
   const afterClaim = state.kind === 'done';
 
@@ -214,7 +213,8 @@ const buildTakerPhases = (state: TakerStep, onAccept: () => void, onClaim: () =>
           <Stack spacing={1}>
             {state.truncated && (
               <Alert severity="info" sx={{ py: 0.5 }}>
-                Midnight deadline truncated to stay {Math.round(limits.bobSafetyBufferSecs / 60)}min inside the Cardano window.
+                Midnight deadline truncated to stay {Math.round(limits.bobSafetyBufferSecs / 60)}min inside the Cardano
+                window.
               </Alert>
             )}
             <AsyncButton variant="contained" color="primary" size="large" onClick={onAccept} pendingLabel="Preparing…">
@@ -239,11 +239,17 @@ const buildTakerPhases = (state: TakerStep, onAccept: () => void, onClaim: () =>
     {
       id: 'claim',
       title: 'Claim ADA on Cardano',
-      subtitle: afterClaim
-        ? `Received ${(Number(state.htlcInfo.amountLovelace) / 1e6).toFixed(6)} ADA. Claim tx ${txLink('cardano', state.claimTxHash)}.`
-        : afterPreimage
-          ? 'Ready to claim with the revealed preimage.'
-          : 'Pending.',
+      subtitle:
+        state.kind === 'done' ? (
+          <>
+            Received {(Number(state.htlcInfo.amountLovelace) / 1e6).toFixed(6)} ADA. Claim tx{' '}
+            {txLink('cardano', state.claimTxHash)}.
+          </>
+        ) : afterPreimage ? (
+          'Ready to claim with the revealed preimage.'
+        ) : (
+          'Pending.'
+        ),
       status: state.kind === 'claiming' ? 'active' : afterClaim ? 'done' : afterPreimage ? 'active' : 'pending',
       action:
         state.kind === 'claim-ready' ? (
@@ -257,12 +263,9 @@ const buildTakerPhases = (state: TakerStep, onAccept: () => void, onClaim: () =>
 
 const PhaseIcon: React.FC<{ status: StepStatus }> = ({ status }) => {
   const theme = useTheme();
-  if (status === 'done')
-    return <CheckCircleIcon fontSize="small" sx={{ color: theme.custom.success }} />;
-  if (status === 'error')
-    return <ErrorOutlineIcon fontSize="small" sx={{ color: theme.custom.danger }} />;
-  if (status === 'active')
-    return <CircularProgress size={16} thickness={5} sx={{ color: theme.custom.cardanoBlue }} />;
+  if (status === 'done') return <CheckCircleIcon fontSize="small" sx={{ color: theme.custom.success }} />;
+  if (status === 'error') return <ErrorOutlineIcon fontSize="small" sx={{ color: theme.custom.danger }} />;
+  if (status === 'active') return <CircularProgress size={16} thickness={5} sx={{ color: theme.custom.cardanoBlue }} />;
   return <RadioButtonUncheckedIcon fontSize="small" sx={{ color: theme.custom.textMuted }} />;
 };
 
@@ -284,11 +287,7 @@ export const SwapProgressModal: React.FC<Props> = (props) => {
     (props.variant === 'taker' && props.state.kind === 'unsafe-deadline' && props.state.reason) ||
     undefined;
 
-  const title = isDone
-    ? 'Swap complete'
-    : props.variant === 'maker'
-      ? 'Making an offer'
-      : 'Taking an offer';
+  const title = isDone ? 'Swap complete' : props.variant === 'maker' ? 'Making an offer' : 'Taking an offer';
 
   const subtitle = `${pay.symbol} on ${pay.chain} → ${receive.symbol} on ${receive.chain}`;
 
@@ -303,7 +302,9 @@ export const SwapProgressModal: React.FC<Props> = (props) => {
         </Stack>
         <Box sx={{ flex: 1 }}>
           <Typography sx={{ fontWeight: 600, fontSize: '1.05rem' }}>{title}</Typography>
-          <Typography variant="caption" sx={{ color: theme.custom.textMuted }}>{subtitle}</Typography>
+          <Typography variant="caption" sx={{ color: theme.custom.textMuted }}>
+            {subtitle}
+          </Typography>
         </Box>
         <IconButton onClick={onClose} size="small">
           <CloseIcon fontSize="small" />
@@ -328,10 +329,7 @@ export const SwapProgressModal: React.FC<Props> = (props) => {
                       flex: 1,
                       minHeight: 24,
                       mt: 0.5,
-                      background:
-                        phase.status === 'done'
-                          ? alpha(theme.custom.success, 0.35)
-                          : alpha('#ffffff', 0.08),
+                      background: phase.status === 'done' ? alpha(theme.custom.success, 0.35) : alpha('#ffffff', 0.08),
                     }}
                   />
                 )}
@@ -340,10 +338,7 @@ export const SwapProgressModal: React.FC<Props> = (props) => {
                 <Typography
                   sx={{
                     fontWeight: 600,
-                    color:
-                      phase.status === 'pending'
-                        ? theme.custom.textMuted
-                        : theme.custom.textPrimary,
+                    color: phase.status === 'pending' ? theme.custom.textMuted : theme.custom.textPrimary,
                   }}
                 >
                   {phase.title}
@@ -371,9 +366,7 @@ export const SwapProgressModal: React.FC<Props> = (props) => {
                 bgcolor: alpha(theme.custom.success, 0.06),
               }}
             >
-              <Typography sx={{ fontWeight: 600, color: theme.custom.success, mb: 0.5 }}>
-                Funds received
-              </Typography>
+              <Typography sx={{ fontWeight: 600, color: theme.custom.success, mb: 0.5 }}>Funds received</Typography>
               {props.variant === 'maker' && props.state.kind === 'done' && (
                 <Typography variant="body2" sx={{ color: theme.custom.textSecondary }}>
                   Sent {props.state.adaAmount.toString()} ADA · Received {props.state.depositAmount.toString()} USDC

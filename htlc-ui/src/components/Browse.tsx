@@ -98,7 +98,7 @@ export const Browse: React.FC = () => {
         adaAmount: swap.adaAmount,
         usdcAmount: swap.usdcAmount,
       });
-      navigate(`/?${params.toString()}`);
+      void navigate(`/?${params.toString()}`);
     },
     [navigate],
   );
@@ -149,9 +149,7 @@ export const Browse: React.FC = () => {
       </Stack>
 
       {!cardano && (
-        <Alert severity="info">
-          Connect your Cardano wallet so Midswap can tell you which offers target your PKH.
-        </Alert>
+        <Alert severity="info">Connect your Cardano wallet so Midswap can tell you which offers target your PKH.</Alert>
       )}
 
       {error && (

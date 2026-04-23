@@ -5,16 +5,7 @@
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
-import {
-  Alert,
-  Box,
-  Button,
-  IconButton,
-  InputAdornment,
-  Stack,
-  TextField,
-  Typography,
-} from '@mui/material';
+import { Alert, Box, Button, IconButton, InputAdornment, Stack, TextField, Typography } from '@mui/material';
 import AutorenewIcon from '@mui/icons-material/Autorenew';
 import { alpha, useTheme } from '@mui/material/styles';
 import { useSwapContext } from '../hooks';
@@ -134,7 +125,14 @@ const MintInner: React.FC = () => {
             </Typography>
           </Box>
 
-          <AsyncButton variant="contained" color="primary" size="large" fullWidth onClick={onMint} pendingLabel="Signing in Midnight wallet…">
+          <AsyncButton
+            variant="contained"
+            color="primary"
+            size="large"
+            fullWidth
+            onClick={onMint}
+            pendingLabel="Signing in Midnight wallet…"
+          >
             Mint USDC
           </AsyncButton>
 

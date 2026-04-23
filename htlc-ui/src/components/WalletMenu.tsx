@@ -5,18 +5,7 @@
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
-import {
-  Box,
-  Button,
-  Chip,
-  Divider,
-  IconButton,
-  Menu,
-  MenuItem,
-  Stack,
-  Tooltip,
-  Typography,
-} from '@mui/material';
+import { Box, Button, Chip, Divider, IconButton, Menu, MenuItem, Stack, Tooltip, Typography } from '@mui/material';
 import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
@@ -31,8 +20,7 @@ const formatAda = (lovelace: bigint): string => {
   return `${whole.toString()}.${frac}`;
 };
 
-const shortHex = (hex?: string): string =>
-  hex ? `${hex.slice(0, 5)}…${hex.slice(-4)}` : '';
+const shortHex = (hex?: string): string => (hex ? `${hex.slice(0, 5)}…${hex.slice(-4)}` : '');
 
 export const WalletMenu: React.FC = () => {
   const theme = useTheme();
@@ -219,11 +207,7 @@ export const WalletMenu: React.FC = () => {
                 value={cardano.paymentKeyHash}
                 onCopy={() => copy(cardano.paymentKeyHash, 'Payment key hash')}
               />
-              <AddressRow
-                label="Address"
-                value={cardano.address}
-                onCopy={() => copy(cardano.address, 'Address')}
-              />
+              <AddressRow label="Address" value={cardano.address} onCopy={() => copy(cardano.address, 'Address')} />
               {adaBalance !== undefined && (
                 <Typography variant="caption" sx={{ color: theme.custom.textMuted }}>
                   Balance: {formatAda(adaBalance)} ADA

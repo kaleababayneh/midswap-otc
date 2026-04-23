@@ -156,7 +156,7 @@ export const useTakerFlow = (): UseTakerFlow => {
   useEffect(() => {
     if (state.kind !== 'watching-cardano' || !cardano) return;
     const controller = new AbortController();
-    (async () => {
+    void (async () => {
       try {
         const htlcInfo = await watchForCardanoLock(
           cardano.cardanoHtlc,
@@ -206,7 +206,7 @@ export const useTakerFlow = (): UseTakerFlow => {
   // Send the deposit tx when entering `depositing`.
   useEffect(() => {
     if (state.kind !== 'depositing' || !session) return;
-    (async () => {
+    void (async () => {
       try {
         const hashBytes = hexToBytes(state.url.hashHex);
         const aliceAuthBytes = hexToBytes(state.url.aliceCpkHex);
@@ -255,7 +255,7 @@ export const useTakerFlow = (): UseTakerFlow => {
       dispatch({ t: 'preimage-seen', preimageHex });
     };
 
-    (async () => {
+    void (async () => {
       try {
         const hashBytes = hexToBytes(state.url.hashHex);
         const preimage = await watchForPreimageReveal(

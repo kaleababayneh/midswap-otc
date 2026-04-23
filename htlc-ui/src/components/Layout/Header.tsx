@@ -7,17 +7,7 @@
  */
 
 import React from 'react';
-import {
-  AppBar,
-  Box,
-  Button,
-  Drawer,
-  IconButton,
-  Stack,
-  Toolbar,
-  useMediaQuery,
-  useTheme,
-} from '@mui/material';
+import { AppBar, Box, Button, Drawer, IconButton, Stack, Toolbar, useMediaQuery, useTheme } from '@mui/material';
 import MenuIcon from '@mui/icons-material/Menu';
 import CloseIcon from '@mui/icons-material/Close';
 import { Link as RouterLink, useLocation, useNavigate } from 'react-router-dom';
@@ -65,9 +55,7 @@ export const Header: React.FC = () => {
                   bgcolor: isActive(to) ? alpha(theme.custom.cardanoBlue, 0.12) : 'transparent',
                   fontWeight: 500,
                   '&:hover': {
-                    bgcolor: isActive(to)
-                      ? alpha(theme.custom.cardanoBlue, 0.2)
-                      : alpha('#ffffff', 0.04),
+                    bgcolor: isActive(to) ? alpha(theme.custom.cardanoBlue, 0.2) : alpha('#ffffff', 0.04),
                     color: theme.custom.textPrimary,
                   },
                 }}
@@ -105,25 +93,27 @@ export const Header: React.FC = () => {
             </IconButton>
           </Stack>
           <Stack spacing={0.5} sx={{ mt: 2 }}>
-            {[...NAV, { to: '/mint', label: 'Mint USDC' }, { to: '/how', label: 'How it works' }].map(({ to, label }) => (
-              <Button
-                key={to}
-                onClick={() => {
-                  navigate(to);
-                  setDrawerOpen(false);
-                }}
-                sx={{
-                  justifyContent: 'flex-start',
-                  borderRadius: 2,
-                  px: 2,
-                  py: 1,
-                  color: isActive(to) ? theme.custom.textPrimary : theme.custom.textSecondary,
-                  bgcolor: isActive(to) ? alpha(theme.custom.cardanoBlue, 0.12) : 'transparent',
-                }}
-              >
-                {label}
-              </Button>
-            ))}
+            {[...NAV, { to: '/mint', label: 'Mint USDC' }, { to: '/how', label: 'How it works' }].map(
+              ({ to, label }) => (
+                <Button
+                  key={to}
+                  onClick={() => {
+                    void navigate(to);
+                    setDrawerOpen(false);
+                  }}
+                  sx={{
+                    justifyContent: 'flex-start',
+                    borderRadius: 2,
+                    px: 2,
+                    py: 1,
+                    color: isActive(to) ? theme.custom.textPrimary : theme.custom.textSecondary,
+                    bgcolor: isActive(to) ? alpha(theme.custom.cardanoBlue, 0.12) : 'transparent',
+                  }}
+                >
+                  {label}
+                </Button>
+              ),
+            )}
           </Stack>
         </Stack>
       </Drawer>

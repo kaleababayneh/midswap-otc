@@ -10,7 +10,6 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Box,
-  Button,
   Chip,
   IconButton,
   Skeleton,
@@ -26,7 +25,7 @@ import {
 import RefreshIcon from '@mui/icons-material/Refresh';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import DatasetLinkedIcon from '@mui/icons-material/DatasetLinked';
-import { alpha, useTheme } from '@mui/material/styles';
+import { useTheme } from '@mui/material/styles';
 import { orchestratorClient, type Swap, type SwapStatus } from '../api/orchestrator-client';
 import { statusLabel, SwapStatusChip } from './SwapStatusChip';
 
@@ -121,7 +120,12 @@ export const Activity: React.FC = () => {
   }, [swaps, nowMs]);
 
   const txLink = (chain: 'midnight' | 'cardano', hash: string | null): React.ReactNode => {
-    if (!hash) return <Typography variant="caption" sx={{ color: theme.custom.textMuted }}>—</Typography>;
+    if (!hash)
+      return (
+        <Typography variant="caption" sx={{ color: theme.custom.textMuted }}>
+          —
+        </Typography>
+      );
     return (
       <a
         href={`${TX_SCAN_BASE[chain]}${hash}`}
@@ -170,7 +174,11 @@ export const Activity: React.FC = () => {
 
       {aggregate && (
         <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
-          <MetricCard label="Total tracked" value={aggregate.total.toString()} hint={`${aggregate.totalAda.toString()} ADA · ${aggregate.totalUsdc.toString()} USDC`} />
+          <MetricCard
+            label="Total tracked"
+            value={aggregate.total.toString()}
+            hint={`${aggregate.totalAda.toString()} ADA · ${aggregate.totalUsdc.toString()} USDC`}
+          />
           <MetricCard
             label="Completed"
             value={aggregate.byStatus.completed.toString()}
@@ -183,7 +191,11 @@ export const Activity: React.FC = () => {
           />
           <MetricCard
             label="In flight"
-            value={(aggregate.byStatus.open + aggregate.byStatus.bob_deposited + aggregate.byStatus.alice_claimed).toString()}
+            value={(
+              aggregate.byStatus.open +
+              aggregate.byStatus.bob_deposited +
+              aggregate.byStatus.alice_claimed
+            ).toString()}
             tone="primary"
             hint="open · deposited · claimed"
           />
@@ -250,17 +262,21 @@ export const Activity: React.FC = () => {
                       {shortHash(s.hash)}
                     </Typography>
                   </TableCell>
-                  <TableCell><SwapStatusChip status={s.status} /></TableCell>
+                  <TableCell>
+                    <SwapStatusChip status={s.status} />
+                  </TableCell>
                   <TableCell align="right">{s.adaAmount}</TableCell>
                   <TableCell align="right">{s.usdcAmount}</TableCell>
                   <TableCell>{formatAge(s.createdAt)}</TableCell>
                   <TableCell>
-                    <Typography variant="caption">{new Date(s.cardanoDeadlineMs).toLocaleString([], {
-                      month: 'short',
-                      day: 'numeric',
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}</Typography>
+                    <Typography variant="caption">
+                      {new Date(s.cardanoDeadlineMs).toLocaleString([], {
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </Typography>
                   </TableCell>
                   <TableCell>{txLink('cardano', s.cardanoLockTx)}</TableCell>
                   <TableCell>{txLink('cardano', s.cardanoClaimTx ?? s.cardanoReclaimTx)}</TableCell>
@@ -332,11 +348,7 @@ const MetricCard: React.FC<{
       >
         {label}
       </Typography>
-      <Typography
-        sx={{ fontSize: '2.1rem', fontWeight: 600, color, lineHeight: 1.1, mt: 0.5 }}
-      >
-        {value}
-      </Typography>
+      <Typography sx={{ fontSize: '2.1rem', fontWeight: 600, color, lineHeight: 1.1, mt: 0.5 }}>{value}</Typography>
       {hint && (
         <Typography variant="caption" sx={{ color: theme.custom.textMuted, display: 'block', mt: 0.5 }}>
           {hint}

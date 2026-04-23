@@ -85,7 +85,11 @@ export const HowTo: React.FC = () => {
           <ListItem sx={{ px: 0 }}>
             <Typography variant="body2">
               <strong>Midnight wallet.</strong>{' '}
-              <Link href="https://docs.midnight.network/develop/tutorial/building/prereqs" target="_blank" rel="noopener">
+              <Link
+                href="https://docs.midnight.network/develop/tutorial/building/prereqs"
+                target="_blank"
+                rel="noopener"
+              >
                 Install Lace for Midnight
               </Link>{' '}
               + some tNight for fees. Grab from the{' '}
@@ -124,7 +128,8 @@ export const HowTo: React.FC = () => {
         <Stack spacing={2.5}>
           <Step n={1} title="Set the amounts and the counterparty">
             Enter how much ADA you&apos;re willing to lock and how much USDC you want in return. Paste your
-            counterparty&apos;s Cardano address or 56-hex payment key hash — this binds the lock to their wallet on-chain.
+            counterparty&apos;s Cardano address or 56-hex payment key hash — this binds the lock to their wallet
+            on-chain.
           </Step>
           <Step n={2} title="Lock ADA on Cardano">
             One Eternl signature posts an HTLC UTxO. Only the counterparty can claim, and only with the secret preimage

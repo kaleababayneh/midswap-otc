@@ -323,7 +323,11 @@ export const useMakerFlow = (): UseMakerFlow => {
     dispatch({ t: 'to-waiting' });
   }, []);
 
-  // Auto-transition locked -> waiting-deposit so we start listening immediately.
+  // Auto-transition locked -> waiting-deposit. This is a deliberate UX
+  // simplification vs the original CLI reference: the share URL is still
+  // prominently surfaced inside the progress modal, so requiring an extra
+  // "start watching" click didn't add safety. `startWaiting` remains exported
+  // in case a caller wants to revert to a click-to-watch gate.
   useEffect(() => {
     if (state.kind === 'locked') {
       dispatch({ t: 'to-waiting' });
