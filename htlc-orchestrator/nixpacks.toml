@@ -4,7 +4,10 @@ providers = ['node']
 nixPkgs = ['nodejs_22']
 
 [phases.install]
-cmds = ['npm install --include=dev']
+cmds = [
+  'npm install --include=dev',
+  'mkdir -p node_modules/libsodium-wrappers-sumo/dist/modules-sumo-esm && rm -f node_modules/libsodium-wrappers-sumo/dist/modules-sumo-esm/libsodium-sumo.mjs && cp node_modules/libsodium-sumo/dist/modules-sumo-esm/libsodium-sumo.mjs node_modules/libsodium-wrappers-sumo/dist/modules-sumo-esm/libsodium-sumo.mjs',
+]
 
 [start]
 cmd = 'npm run start'
