@@ -23,7 +23,7 @@ import { setNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 import type { FastifyBaseLogger } from 'fastify';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { ledger } from '../../contract/src/managed/htlc/contract/index.js';
+import { ledger } from './generated/htlc/index.js';
 import type { SwapStore } from './db.js';
 
 export type MidnightNetwork = 'preprod' | 'undeployed';
