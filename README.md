@@ -50,7 +50,6 @@ The current preprod build settles **USDM (Cardano)** ⇄ **USDC (Midnight)** in 
 | Midnight | HTLC contract | `5a3fc37f04c3c5bb2e957da34dfa989b9eb21513889c9dd438d000918279b457` |
 | Midnight | USDC token contract | `a949ee48c3078ffc7efa829b4837d1554ea4f36775853baeedf3dd86e1d27b5e` |
 
-Cardano contracts open directly on [Cardanoscan preprod](https://preprod.cardanoscan.io). Midnight contracts can be inspected on the [1AM explorer](https://explorer.1am.xyz/?network=preprod) — paste either contract address into the search bar.
 
 ## How HTLCs are used
 
