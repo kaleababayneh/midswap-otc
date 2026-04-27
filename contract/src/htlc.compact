@@ -1,4 +1,4 @@
-// Generic hash-time-lock contract (HTLC) for native Midnight unshielded
+// Hash-time-lock contract (HTLC) for native Midnight unshielded
 // tokens. Acts as a pure escrow — it pulls coins of an arbitrary `color`
 // in via receiveUnshielded, holds them under a hash lock, and pushes them
 // out via sendUnshielded to either the receiver (withdraw with preimage)
