@@ -42,7 +42,7 @@ Kaamos settles cross-chain trades using [**hash-time-locked contracts (HTLCs)**]
 The current preprod build settles **USDM (Cardano)** ⇄ **USDC (Midnight)** in either direction, with an institutional RFQ surface on top public order book, quote/counter/accept negotiation, and per-deal wallet binding. The orchestrator is an indexer for UX and observability; chain state is authoritative.
 
 > [!NOTE]
-> We wanted **shielded USDC** to keep deal sizes and counterparties confidential, but Compact can't atomically lock a balance-map shielded fungible (the OZ `FungibleToken` pattern) from a separate HTLC contract. So USDC is a **native Zswap unshielded** token: the HTLC custodies it via `receiveUnshielded(...)` in one circuit, no cross-contract call needed.
+> We originally wanted **shielded USDC** to keep deal sizes and counterparties confidential, but Compact can't atomically lock a balance-map shielded fungible (the OZ `FungibleToken` pattern) from a separate HTLC contract. So USDC is a **native Zswap unshielded** token: the HTLC custodies it via `receiveUnshielded(...)` in one circuit, no cross-contract call needed.
 
 ## Deployed contracts (preprod)
 
