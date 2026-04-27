@@ -37,7 +37,7 @@ There is no shared ledger between Cardano and Midnight, so neither chain can dir
 
 ## Solution
 
-Kaamos settles cross-chain trades using **hash-time-locked contracts (HTLCs)** deployed natively on each chain, both bound to the same SHA-256 preimage. Revealing the preimage to claim on one chain mathematically forces the same reveal on the other. If either party walks away, both legs refund automatically when their timelocks expire.
+Kaamos settles cross-chain trades using [**hash-time-locked contracts (HTLCs)**](https://www.youtube.com/watch?v=VvEaBeiteLI) deployed natively on each chain, both bound to the same SHA-256 preimage. Revealing the preimage to claim on one chain mathematically forces the same reveal on the other. If either party walks away, both legs refund automatically when their timelocks expire.
 
 The current preprod build settles **USDM (Cardano)** ⇄ **USDC (Midnight)** in either direction, with an institutional RFQ surface on top — public order book, quote/counter/accept negotiation, and per-deal wallet binding. The orchestrator is an indexer for UX and observability; chain state is authoritative.
 
