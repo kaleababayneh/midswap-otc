@@ -87,6 +87,13 @@ The reverse direction (`usdc-usdm`) is the mirror image: the maker deposits on M
 
 SHA-256 was picked because Compact's `persistentHash<Bytes<32>>` and Plutus V3's `sha2_256` produce the same digest for the same 32 bytes — no encoding adapters, no curve crossover.
 
+**Where the preimage lives** at each stage:
+
+- **Maker's `localStorage`** — between lock and claim, so a tab reload can resume the claim. 
+- **Midnight `revealedPreimages` map** — `Map<Bytes<32>, Bytes<32>>` ledger state written by the Compact circuit on a forward-direction claim; indexable by hash.
+- **Cardano spend redeemer** — the `Withdraw{preimage}` argument of the maker's spend tx on a reverse-direction claim; recovered via Blockfrost `/txs/:hash/redeemers`.
+- **Orchestrator `swaps.midnight_preimage` (SQLite)** — advisory fast-path cache populated by the maker and the Cardano watcher. The chain reveal is authoritative; the cache is a UX speedup.
+
 ## Settlement flow
 
 Zooming out from the cryptographic mechanism, here is how a deal moves through Kaamos end-to-end. Both trade directions follow the same HTLC pattern; only which chain locks first changes.
