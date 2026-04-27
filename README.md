@@ -74,6 +74,35 @@ The reverse direction (`usdc-usdm`) is the mirror image: the maker deposits on M
 
 SHA-256 was picked because Compact's `persistentHash<Bytes<32>>` and Plutus V3's `sha2_256` produce the same digest for the same 32 bytes — no encoding adapters, no curve crossover.
 
+## Settlement flow
+
+Zooming out from the cryptographic mechanism, here is how a deal moves through Kaamos end-to-end. Both trade directions follow the same HTLC pattern; only which chain locks first changes.
+
+### OTC RFQ flow
+
+1. **Originator creates an RFQ** with a side, sell amount, indicative buy amount, and expiry.
+2. **Liquidity providers submit quotes** against the RFQ, each carrying a per-deal receive-side wallet snapshot.
+3. **Originator accepts a quote**, freezing the negotiated terms and the counterparty's wallet snapshot.
+4. **Settlement starts** — the accepted RFQ bridges into the atomic-swap flow via a single `rfqId` field on swap creation.
+5. **Activity and notifications** track RFQ, quote, and settlement lifecycle events for both sides.
+
+### Atomic swap flow
+
+The protocol traced above, restated as the operator sees it:
+
+1. **Maker commits first.** The initiating party locks or deposits on the first chain.
+2. **Taker commits second.** The counterparty locks or deposits on the other chain against the same hash.
+3. **Claim reveals the preimage.** The first successful claim publishes the secret on its chain.
+4. **Counterparty claims with the same preimage.** This completes both sides of the swap.
+5. **Refunds are available after expiry.** If the flow stalls, each side can reclaim from its own chain after its timelock.
+
+### Safety model
+
+- **Hashlock:** funds can only be claimed with the correct SHA-256 preimage.
+- **Timelock:** funds can be reclaimed after the deadline if settlement does not complete.
+- **Native execution:** Cardano and Midnight assets settle on their own chains; nothing crosses a bridge.
+- **Orchestrator is not custody:** it stores RFQs, metadata, and observed chain state — never funds or private keys.
+
 ## Architecture
 
 ```
