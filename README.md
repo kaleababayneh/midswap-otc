@@ -22,6 +22,9 @@
 
 ---
 
+> [!WARNING]
+> Please use the **1AM preprod wallet** for Midnight and the **Lace preprod wallet** for Cardano, and disable **gas sponsorship** on the 1AM wallet some features may not work otherwise.
+
 ## Problem
 
 Two parties on different chains want to swap assets atomically — say USDM on Cardano for USDC on Midnight. The available options are bad:
@@ -37,6 +40,17 @@ There is no shared ledger between Cardano and Midnight, so neither chain can dir
 Kaamos settles cross-chain trades using **hash-time-locked contracts (HTLCs)** deployed natively on each chain, both bound to the same SHA-256 preimage. Revealing the preimage to claim on one chain mathematically forces the same reveal on the other. If either party walks away, both legs refund automatically when their timelocks expire.
 
 The current preprod build settles **USDM (Cardano)** ⇄ **USDC (Midnight)** in either direction, with an institutional RFQ surface on top — public order book, quote/counter/accept negotiation, and per-deal wallet binding. The orchestrator is an indexer for UX and observability; chain state is authoritative.
+
+## Deployed contracts (preprod)
+
+| Chain | Contract | Address |
+|---|---|---|
+| Cardano | HTLC validator script | [`addr_test1wqnjap…v798e`](https://preprod.cardanoscan.io/address/addr_test1wqnjaplx5fswjr0ja7l2uuv890058f5qkak6cmdpqx8fn3q5v798e) |
+| Cardano | USDM minting policy | [`def68337…77088ea`](https://preprod.cardanoscan.io/tokenPolicy/def68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088ea) (asset name `USDM`) |
+| Midnight | HTLC contract | `5a3fc37f04c3c5bb2e957da34dfa989b9eb21513889c9dd438d000918279b457` |
+| Midnight | USDC token contract | `a949ee48c3078ffc7efa829b4837d1554ea4f36775853baeedf3dd86e1d27b5e` |
+
+Cardano contracts open directly on [Cardanoscan preprod](https://preprod.cardanoscan.io). Midnight contracts can be inspected on the [1AM explorer](https://explorer.1am.xyz/?network=preprod) — paste either contract address into the search bar.
 
 ## How HTLCs are used
 
