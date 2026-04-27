@@ -23,7 +23,7 @@
 ---
 
 > [!WARNING]
-> Please use the **1AM preprod wallet** for Midnight and the **Lace preprod wallet** for Cardano, and disable **gas sponsorship** on the 1AM wallet some features may not work otherwise.
+> Please use the **1AM preprod wallet** for Midnight and the **Lace preprod wallet** for Cardano, and disable **gas sponsorship** on the 1AM wallet some features may not work otherwise. Contracts are compiled with the **Compact compiler `0.30.0`** (language `0.22.0`, runtime `0.15.0`).
 
 ## Problem
 
