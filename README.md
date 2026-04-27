@@ -27,10 +27,10 @@
 
 ## Problem
 
-Two parties on different chains want to swap assets atomically — say USDM on Cardano for USDC on Midnight. The available options are bad:
+Two parties on different chains want to swap assets atomically say USDM on Cardano for USDC on Midnight. The available options are bad:
 
 - **Custodial desks** reintroduce counterparty risk and break self-custody.
-- **Bridges** require trust in operators, multisigs, or relayers — and have a long history of nine-figure exploits.
+- **Bridges** require trust in operators, multisigs, or relayers and have a long history of nine-figure exploits.
 - **Manual "you send first"** coordination puts whichever party moves second at the mercy of the first.
 
 There is no shared ledger between Cardano and Midnight, so neither chain can directly observe the other. We need a settlement primitive where both legs commit or both legs unwind, with no third party holding funds.
@@ -39,7 +39,7 @@ There is no shared ledger between Cardano and Midnight, so neither chain can dir
 
 Kaamos settles cross-chain trades using [**hash-time-locked contracts (HTLCs)**](https://www.youtube.com/watch?v=VvEaBeiteLI) deployed natively on each chain, both bound to the same SHA-256 preimage. Revealing the preimage to claim on one chain mathematically forces the same reveal on the other. If either party walks away, both legs refund automatically when their timelocks expire.
 
-The current preprod build settles **USDM (Cardano)** ⇄ **USDC (Midnight)** in either direction, with an institutional RFQ surface on top — public order book, quote/counter/accept negotiation, and per-deal wallet binding. The orchestrator is an indexer for UX and observability; chain state is authoritative.
+The current preprod build settles **USDM (Cardano)** ⇄ **USDC (Midnight)** in either direction, with an institutional RFQ surface on top public order book, quote/counter/accept negotiation, and per-deal wallet binding. The orchestrator is an indexer for UX and observability; chain state is authoritative.
 
 ## Deployed contracts (preprod)
 
